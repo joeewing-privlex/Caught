@@ -17,7 +17,7 @@ export function setError(elId, msg) {
   if (el) el.textContent = msg || '';
 }
 
-export function renderLobby({ roomCode, players, host, allReady }, myId) {
+export function renderLobby({ roomCode, players, host, allReady, mapId, availableMaps }, myId) {
   document.getElementById('room-code-display').textContent = roomCode || '';
   const container = document.getElementById('lobby-players');
   container.innerHTML = '';
@@ -27,6 +27,25 @@ export function renderLobby({ roomCode, players, host, allReady }, myId) {
     div.innerHTML = `<span>${p.name}${p.id === host ? ' <span class="host-badge">HOST</span>' : ''}</span><span>Team ${p.team}${p.ready ? ' ✓' : ''}</span>`;
     container.appendChild(div);
   }
+
+  // Map picker — only host can interact, others see the host's selection.
+  const sel = document.getElementById('map-select');
+  if (availableMaps && sel.options.length !== availableMaps.length + 1) {
+    sel.innerHTML = '';
+    const randomOpt = document.createElement('option');
+    randomOpt.value = 'random';
+    randomOpt.textContent = '🎲 Random';
+    sel.appendChild(randomOpt);
+    for (const m of availableMaps) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.name;
+      sel.appendChild(opt);
+    }
+  }
+  sel.value = mapId || 'random';
+  sel.disabled = myId !== host;
+
   const startBtn = document.getElementById('btn-start');
   const waitMsg  = document.getElementById('waiting-msg');
   if (myId === host) {
@@ -43,6 +62,14 @@ export function showCountdown(n) {
   el.textContent = n > 0 ? n : 'GO!';
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 800);
+}
+
+export function showMapName(name) {
+  const el = document.getElementById('map-name-banner');
+  if (!el) return;
+  el.textContent = name;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
 }
 
 export function showEndScreen({ scores, winner }, myTeam) {

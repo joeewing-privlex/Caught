@@ -1,39 +1,41 @@
 const {
-  MAP_WIDTH, MAP_HEIGHT, BASE_RADIUS, COLLECTION_RADIUS, SPEED_NORMAL,
-  SPEED_MAX_PENALTY, TRAIL_SPACING, TICK_RATE, BUTTERFLY_TARGET_COUNT,
+  BASE_RADIUS, COLLECTION_RADIUS, SPEED_NORMAL,
+  SPEED_MAX_PENALTY, TRAIL_SPACING, BUTTERFLY_TARGET_COUNT,
   BUTTERFLY_RESPAWN_DELAY_SEC, POWERUP_RESPAWN_SEC, MAGNET_RADIUS,
-  BASE_IMMUNITY_SEC, ROUND_DURATION,
+  BASE_IMMUNITY_SEC, ROUND_DURATION, DISCONNECT_HOLD_SEC,
 } = require('./config');
 const { EFFECT_DURATION, initFlowers, pickRespawnPoint } = require('./powerups');
 const butterflyMod = require('./butterfly');
-const { resolveObstacleSlide, clampToMap, collidesWithObstacles, PLAYER_RADIUS } = require('./collision');
+const { resolveObstacleSlide, clampToMap, PLAYER_RADIUS } = require('./collision');
 const { checkTheft } = require('./theft');
 
-const BASES = {
-  A: { x: 160, y: 600 },
-  B: { x: 1440, y: 600 },
-};
-
 // Spawn positions near each base
-function spawnPositions(team, count) {
-  const base = BASES[team];
-  const dir = team === 'A' ? 1 : -1;
+function spawnPositions(map, team, count) {
+  const base = map.bases[team];
+  const otherTeam = team === 'A' ? 'B' : 'A';
+  const other = map.bases[otherTeam];
+  // Face roughly toward the opposing base
+  const dx = Math.sign(other.x - base.x) || 1;
+  const dy = Math.sign(other.y - base.y) || 0;
   const positions = [];
   for (let i = 0; i < count; i++) {
     const offset = (i - (count - 1) / 2) * 60;
-    positions.push({ x: base.x + dir * 180, y: base.y + offset });
+    // Place spawns 180 units toward the enemy, and offset perpendicular to the spawn-vector.
+    const px = base.x + dx * 180 - dy * offset;
+    const py = base.y + dy * 180 + dx * offset;
+    positions.push({ x: px, y: py });
   }
   return positions;
 }
 
-function createPlayer(id, name, team, spawnPos) {
+function createPlayer(id, name, team, spawnPos, facingAngle) {
   return {
     id,
     name,
     team,
     x: spawnPos.x,
     y: spawnPos.y,
-    angle: team === 'A' ? 0 : Math.PI,
+    angle: facingAngle,
     trail: [],          // array of butterfly objects (in-trail)
     pathHistory: [],    // array of {x,y} for trail rendering
     powerup: null,
@@ -48,8 +50,9 @@ function createPlayer(id, name, team, spawnPos) {
 }
 
 class GameRoom {
-  constructor(roomCode, players) {
+  constructor(roomCode, players, map) {
     this.roomCode = roomCode;
+    this.map = map;
     this.players = {};   // id -> player
     this.butterflies = {};  // id -> butterfly
     this.flowers = {};   // id -> flower
@@ -57,31 +60,30 @@ class GameRoom {
     this.timeRemaining = ROUND_DURATION;
     this.tick = 0;
     this.respawnQueue = []; // { at: timestamp }
-    this.flowerRespawnQueue = []; // { at: timestamp, flower }
-    this.phase = 'playing'; // 'playing' | 'ended'
+    this.flowerRespawnQueue = []; // { at: timestamp }
+    this.phase = 'playing';
     this.io = null;
 
-    // Assign spawn positions
     const teamA = players.filter(p => p.team === 'A');
     const teamB = players.filter(p => p.team === 'B');
-    const posA = spawnPositions('A', teamA.length);
-    const posB = spawnPositions('B', teamB.length);
+    const posA = spawnPositions(map, 'A', teamA.length);
+    const posB = spawnPositions(map, 'B', teamB.length);
+    const angleA = Math.atan2(map.bases.B.y - map.bases.A.y, map.bases.B.x - map.bases.A.x);
+    const angleB = angleA + Math.PI;
 
     teamA.forEach((p, i) => {
-      this.players[p.id] = createPlayer(p.id, p.name, 'A', posA[i]);
+      this.players[p.id] = createPlayer(p.id, p.name, 'A', posA[i], angleA);
     });
     teamB.forEach((p, i) => {
-      this.players[p.id] = createPlayer(p.id, p.name, 'B', posB[i]);
+      this.players[p.id] = createPlayer(p.id, p.name, 'B', posB[i], angleB);
     });
 
-    // Spawn initial butterflies
     for (let i = 0; i < BUTTERFLY_TARGET_COUNT; i++) {
-      const b = butterflyMod.create();
+      const b = butterflyMod.create(this.map);
       this.butterflies[b.id] = b;
     }
 
-    // Spawn flowers
-    for (const f of initFlowers()) {
+    for (const f of initFlowers(this.map)) {
       this.flowers[f.id] = f;
     }
   }
@@ -91,7 +93,6 @@ class GameRoom {
   applyInput(playerId, dx, dy) {
     const p = this.players[playerId];
     if (!p || p.disconnected) return;
-    // Clamp
     p.dx = Math.max(-1, Math.min(1, dx));
     p.dy = Math.max(-1, Math.min(1, dy));
   }
@@ -108,20 +109,18 @@ class GameRoom {
 
     const now = Date.now();
 
-    // Process butterfly respawn queue
     for (let i = this.respawnQueue.length - 1; i >= 0; i--) {
       if (now >= this.respawnQueue[i].at) {
-        const b = butterflyMod.create();
+        const b = butterflyMod.create(this.map);
         this.butterflies[b.id] = b;
         this.respawnQueue.splice(i, 1);
       }
     }
 
-    // Process flower respawn queue
     for (let i = this.flowerRespawnQueue.length - 1; i >= 0; i--) {
       const entry = this.flowerRespawnQueue[i];
       if (now >= entry.at) {
-        const f = pickRespawnPoint(Object.values(this.flowers));
+        const f = pickRespawnPoint(Object.values(this.flowers), this.map);
         if (f) {
           this.flowers[f.id] = f;
           if (this.io) this.io.to(this.roomCode).emit('powerup:spawn', { id: f.id, type: f.type, position: { x: f.x, y: f.y } });
@@ -130,25 +129,21 @@ class GameRoom {
       }
     }
 
-    // Clean up disconnected players whose hold time expired
     for (const p of Object.values(this.players)) {
-      if (p.disconnected && now - p.disconnectAt > require('./config').DISCONNECT_HOLD_SEC * 1000) {
+      if (p.disconnected && now - p.disconnectAt > DISCONNECT_HOLD_SEC * 1000) {
         delete this.players[p.id];
       }
     }
 
-    // Update butterflies
     for (const b of Object.values(this.butterflies)) {
-      butterflyMod.update(b, dt);
+      butterflyMod.update(b, dt, this.map);
     }
 
-    // Update players
     for (const p of Object.values(this.players)) {
       if (p.disconnected) continue;
       this._updatePlayer(p, dt, now);
     }
 
-    // Theft checks
     const playerList = Object.values(this.players).filter(p => !p.disconnected);
     for (const thief of playerList) {
       for (const victim of playerList) {
@@ -164,7 +159,6 @@ class GameRoom {
       }
     }
 
-    // Maintain butterfly count
     const freeCount = Object.keys(this.butterflies).length;
     const pending = this.respawnQueue.length;
     const needed = BUTTERFLY_TARGET_COUNT - freeCount - pending;
@@ -174,7 +168,6 @@ class GameRoom {
   }
 
   _updatePlayer(p, dt, now) {
-    // Power-up tick
     if (p.powerup) {
       p.powerupRemaining -= dt;
       if (p.powerupRemaining <= 0) {
@@ -190,14 +183,12 @@ class GameRoom {
     const ndx = p.dx / mag;
     const ndy = p.dy / mag;
 
-    // Speed factor
     let speed = SPEED_NORMAL;
     const trailCount = p.trail.length;
     if (trailCount >= 10) speed *= SPEED_MAX_PENALTY;
     else if (trailCount > 0) speed *= 1 - (1 - SPEED_MAX_PENALTY) * (trailCount / 10);
     if (p.powerup === 'white_trillium') speed *= 1.5;
     if (p.powerup === 'pink_trillium') {
-      // Attract nearby free butterflies
       for (const b of Object.values(this.butterflies)) {
         const dist = Math.hypot(b.x - p.x, b.y - p.y);
         if (dist < MAGNET_RADIUS && dist > 1) {
@@ -211,19 +202,17 @@ class GameRoom {
     const nx = p.x + ndx * speed * dt;
     const ny = p.y + ndy * speed * dt;
 
-    const resolved = resolveObstacleSlide(p.x, p.y, nx, ny, PLAYER_RADIUS);
-    const clamped = clampToMap(resolved.x, resolved.y, PLAYER_RADIUS);
+    const resolved = resolveObstacleSlide(p.x, p.y, nx, ny, PLAYER_RADIUS, this.map);
+    const clamped = clampToMap(resolved.x, resolved.y, PLAYER_RADIUS, this.map);
     p.x = clamped.x;
     p.y = clamped.y;
 
     if (mag > 0.01) p.angle = Math.atan2(ndy, ndx);
 
-    // Record path history for trail
     p.pathHistory.unshift({ x: p.x, y: p.y });
     const maxHistory = (p.trail.length + 2) * TRAIL_SPACING * 2;
     if (p.pathHistory.length > Math.max(200, maxHistory)) p.pathHistory.length = Math.max(200, maxHistory);
 
-    // Collect nearby free butterflies
     const collectR2 = COLLECTION_RADIUS * COLLECTION_RADIUS;
     for (const [bid, b] of Object.entries(this.butterflies)) {
       if ((p.x - b.x) ** 2 + (p.y - b.y) ** 2 < collectR2) {
@@ -232,8 +221,7 @@ class GameRoom {
       }
     }
 
-    // Base zone: bank butterflies
-    const base = BASES[p.team];
+    const base = this.map.bases[p.team];
     const distToBase = Math.hypot(p.x - base.x, p.y - base.y);
     if (distToBase < BASE_RADIUS && p.trail.length > 0) {
       const pts = p.trail.length;
@@ -245,15 +233,13 @@ class GameRoom {
       }
     }
 
-    // Base immunity
     const enemyTeam = p.team === 'A' ? 'B' : 'A';
-    const enemyBase = BASES[enemyTeam];
+    const enemyBase = this.map.bases[enemyTeam];
     const distToEnemy = Math.hypot(p.x - enemyBase.x, p.y - enemyBase.y);
     if (distToBase < BASE_RADIUS || distToEnemy < BASE_RADIUS) {
       p.immuneUntil = now + BASE_IMMUNITY_SEC * 1000;
     }
 
-    // Flower pickup (radius 40)
     for (const [fid, f] of Object.entries(this.flowers)) {
       if ((p.x - f.x) ** 2 + (p.y - f.y) ** 2 < 40 * 40) {
         p.powerup = f.type;
@@ -317,7 +303,6 @@ class GameRoom {
   playerDisconnect(playerId) {
     const p = this.players[playerId];
     if (!p) return;
-    // Drop trail butterflies at player position
     for (const b of p.trail) {
       b.x = p.x + (Math.random() - 0.5) * 40;
       b.y = p.y + (Math.random() - 0.5) * 40;
@@ -337,4 +322,4 @@ class GameRoom {
   }
 }
 
-module.exports = { GameRoom, BASES };
+module.exports = { GameRoom };

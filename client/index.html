@@ -59,6 +59,19 @@
       pointer-events: none; opacity: 0; transition: opacity 0.3s; }
     #countdown-overlay.show { opacity: 1; }
 
+    #map-name-banner { position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
+      font-size: 1.6rem; color: #ffd060; text-shadow: 0 2px 8px rgba(0,0,0,0.7); z-index: 18;
+      pointer-events: none; opacity: 0; transition: opacity 0.4s; padding: 6px 18px;
+      background: rgba(20,40,20,0.7); border-radius: 8px; }
+    #map-name-banner.show { opacity: 1; }
+
+    .map-picker { display: flex; gap: 10px; align-items: center; width: 100%; margin: 6px 0; }
+    .map-picker label { font-size: 0.9rem; color: #c8e090; }
+    .map-picker select { flex: 1; padding: 8px 10px; border-radius: 6px; border: 2px solid #5a8a3a;
+      background: #0f1f0f; color: #f0e8d0; font-size: 0.95rem; font-family: inherit; cursor: pointer; }
+    .map-picker select:disabled { opacity: 0.6; cursor: not-allowed; }
+    .map-picker select:focus { outline: none; border-color: #a8d070; }
+
     /* End screen */
     #end-screen .final-scores { display: flex; gap: 40px; margin: 8px 0; }
     .score-block { text-align: center; }
@@ -86,6 +99,7 @@
 <canvas id="canvas"></canvas>
 
 <div id="countdown-overlay"></div>
+<div id="map-name-banner"></div>
 
 <div id="hud">
   <div id="score-a">🦋 Team A: <span id="score-a-val">0</span></div>
@@ -131,6 +145,10 @@
     <div id="room-code-display"></div>
     <p style="font-size:0.8rem;color:#a0b080">Share this code with friends</p>
     <div id="lobby-players"></div>
+    <div class="map-picker">
+      <label for="map-select">Map</label>
+      <select id="map-select"></select>
+    </div>
     <div id="error-msg-lobby"></div>
     <button class="btn-primary" id="btn-start" style="display:none">Start Game</button>
     <p id="waiting-msg" style="color:#a0b080;font-size:0.9rem"></p>

@@ -1,22 +1,23 @@
-// Canvas renderer — 60fps draw loop with linear interpolation between server ticks
+// Canvas renderer — 60fps draw loop with linear interpolation between server ticks.
+// Map dimensions, obstacles, stream geometry, and bases all come from the server's
+// game:start payload — nothing here is hardcoded per-map.
 
-const MAP_W = 16000, MAP_H = 12000;
 const PLAYER_RADIUS = 16;
-const BUTTERFLY_RADIUS = 8;
 const FLOWER_RADIUS = 12;
 const BASE_RADIUS = 120;
-const TRAIL_SPACING = 30;
 
 let canvas, ctx;
 let prevState = null, currState = null;
 let lastTickTime = 0;
 let myId = null;
 let myTeam = null;
+let mapWidth = 1600;
+let mapHeight = 1200;
 let obstacles = [];
-let stream = { halfWidth: 48, crossingYs: [200, 600, 1000], crossingHalfHeight: 60 };
+let stream = null;       // null when the map has no stream
 let bases = {};
 let rafId = null;
-let notifications = []; // { text, x, y, color, born }
+let notifications = [];
 
 const TEAM_COLOR = { A: '#4080ff', B: '#ff4040' };
 const BUTTERFLY_COLORS = {
@@ -35,12 +36,14 @@ const POWERUP_ICONS = {
   red_trillium: '🛡️',
 };
 
-export function init(canvasEl, obstacleData, streamData, baseData, localId, localTeam) {
+export function init(canvasEl, mapData, localId, localTeam) {
   canvas = canvasEl;
   ctx = canvas.getContext('2d');
-  obstacles = obstacleData || [];
-  if (streamData) stream = streamData;
-  bases = baseData || {};
+  mapWidth = mapData.width;
+  mapHeight = mapData.height;
+  obstacles = mapData.obstacles || [];
+  stream = mapData.stream || null;
+  bases = mapData.bases || {};
   myId = localId;
   myTeam = localTeam;
   resize();
@@ -114,10 +117,9 @@ function loop() {
 
   const W = canvas.width, H = canvas.height;
 
-  // Camera: follow local player
   const me = state.players.find(p => p.id === myId);
-  const camX = me ? me.x - W / 2 : MAP_W / 2 - W / 2;
-  const camY = me ? me.y - H / 2 : MAP_H / 2 - H / 2;
+  const camX = me ? me.x - W / 2 : mapWidth / 2 - W / 2;
+  const camY = me ? me.y - H / 2 : mapHeight / 2 - H / 2;
 
   ctx.clearRect(0, 0, W, H);
   ctx.save();
@@ -129,46 +131,74 @@ function loop() {
   drawFlowers(state);
   drawButterflies(state);
   drawPlayers(state, me);
-  drawNotifications(camX, camY);
+  drawNotifications();
 
   ctx.restore();
 }
 
 function drawMap() {
-  // Ground 3a6e2a
-  ctx.fillStyle = '#00eeff';
-  ctx.fillRect(0, 0, MAP_W, MAP_H);
+  // Ground
+  ctx.fillStyle = '#3a6e2a';
+  ctx.fillRect(0, 0, mapWidth, mapHeight);
 
-  // Decorative patches (deterministic from fixed seeds) 2e5e22
-  ctx.fillStyle = '#ff0000';
+  // Decorative patches (deterministic from fixed seeds)
+  ctx.fillStyle = '#2e5e22';
   for (let i = 0; i < 60; i++) {
-    const x = ((i * 271) % MAP_W);
-    const y = ((i * 173) % MAP_H);
+    const x = ((i * 271) % mapWidth);
+    const y = ((i * 173) % mapHeight);
     ctx.beginPath();
     ctx.ellipse(x, y, 30 + (i % 4) * 10, 20 + (i % 3) * 8, (i * 0.3), 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Stream — drawn as a continuous diagonal band with crossing gaps
+  if (stream) drawStream();
+}
+
+function drawStream() {
+  const dx = stream.endX - stream.startX;
+  const dy = stream.endY - stream.startY;
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return;
+  const ux = dx / len, uy = dy / len;          // unit along stream
+  const px = -uy, py = ux;                     // unit perpendicular
   const sw = stream.halfWidth;
-  const crossYs = stream.crossingYs;
-  const crossH  = stream.crossingHalfHeight;
+  const crossings = stream.crossings || [];
+
+  // Draw the band as small quads stepped along the segment, skipping crossings.
   ctx.fillStyle = '#3060a0';
   ctx.globalAlpha = 0.75;
-  for (let y = 0; y < MAP_H; y += 4) {
-    if (crossYs.some(cy => Math.abs(y - cy) < crossH)) continue;
-    const cx = 600 + (y / MAP_H) * 400;
-    ctx.fillRect(cx - sw, y, sw * 2, 5);
+  const step = 4;
+  for (let s = 0; s < len; s += step) {
+    const t = s / len;
+    if (crossings.some(c => Math.abs(t - c.t) * len < c.halfLen)) continue;
+    const cx = stream.startX + ux * s;
+    const cy = stream.startY + uy * s;
+    // Quad of width 2*sw perpendicular to stream, length `step+1` along stream.
+    ctx.beginPath();
+    const a = step + 1;
+    const x1 = cx + px * sw,            y1 = cy + py * sw;
+    const x2 = cx - px * sw,            y2 = cy - py * sw;
+    const x3 = cx - px * sw + ux * a,   y3 = cy - py * sw + uy * a;
+    const x4 = cx + px * sw + ux * a,   y4 = cy + py * sw + uy * a;
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.lineTo(x3, y3);
+    ctx.lineTo(x4, y4);
+    ctx.closePath();
+    ctx.fill();
   }
   ctx.globalAlpha = 1;
 
-  // Stepping stones at crossings
+  // Stepping stones at each crossing centre
   ctx.fillStyle = '#8090a0';
-  for (const cy of crossYs) {
-    const cx = 600 + (cy / MAP_H) * 400;
+  for (const c of crossings) {
+    const cx = stream.startX + ux * (c.t * len);
+    const cy = stream.startY + uy * (c.t * len);
     for (let i = -1; i <= 1; i++) {
+      const sx = cx + ux * i * 24;
+      const sy = cy + uy * i * 24;
       ctx.beginPath();
-      ctx.ellipse(cx + i * 24, cy, 16, 11, 0, 0, Math.PI * 2);
+      ctx.ellipse(sx, sy, 16, 11, Math.atan2(uy, ux), 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -177,7 +207,6 @@ function drawMap() {
 function drawObstacles() {
   for (const obs of obstacles) {
     if (obs.type === 'circle') {
-      // Boulder / tree trunk
       ctx.fillStyle = obs.r > 35 ? '#706050' : '#5a7040';
       ctx.beginPath();
       ctx.arc(obs.x, obs.y, obs.r, 0, Math.PI * 2);
@@ -205,7 +234,6 @@ function drawBases() {
     ctx.arc(base.x, base.y, BASE_RADIUS, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
-    // Label
     ctx.fillStyle = color;
     ctx.font = 'bold 14px Georgia';
     ctx.textAlign = 'center';
@@ -214,11 +242,9 @@ function drawBases() {
 }
 
 function drawFlowers(state) {
-  // Flowers come via powerup:spawn events tracked in main.js and passed here via state extension
   if (!state.flowers) return;
   for (const f of state.flowers) {
     const color = POWERUP_COLORS[f.type] || '#ffffff';
-    // Draw simple trillium shape
     ctx.save();
     ctx.translate(f.x, f.y);
     for (let i = 0; i < 3; i++) {
@@ -230,7 +256,6 @@ function drawFlowers(state) {
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-    // Center
     ctx.fillStyle = '#ffff80';
     ctx.beginPath();
     ctx.arc(0, 0, 4, 0, Math.PI * 2);
@@ -253,7 +278,6 @@ function drawButterfly(x, y, color, wingScale) {
   ctx.translate(x, y);
   ctx.fillStyle = color;
   ctx.globalAlpha = 0.9;
-  // Two wings
   for (const side of [-1, 1]) {
     ctx.save();
     ctx.scale(side * wingScale, 1);
@@ -265,7 +289,7 @@ function drawButterfly(x, y, color, wingScale) {
   ctx.globalAlpha = 0.5;
   ctx.fillStyle = '#000';
   ctx.beginPath();
-  ctx.ellipse(0, 0, 2, 5, 0, 0, Math.PI * 2); // body
+  ctx.ellipse(0, 0, 2, 5, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 1;
   ctx.restore();
@@ -277,13 +301,11 @@ function drawPlayers(state, me) {
     const isMe = p.id === myId;
     const color = TEAM_COLOR[p.team];
 
-    // Draw trail butterflies
     const wingOpen = (performance.now() / 250) % 1 < 0.5;
     for (const pos of (p.trailPositions || [])) {
       drawButterfly(pos.x, pos.y, color, wingOpen ? 1 : 0.5);
     }
 
-    // Shield aura
     if (p.shielded) {
       ctx.globalAlpha = 0.3;
       ctx.fillStyle = '#ff4040';
@@ -293,11 +315,9 @@ function drawPlayers(state, me) {
       ctx.globalAlpha = 1;
     }
 
-    // Player body
     ctx.save();
     ctx.translate(p.x, p.y);
 
-    // Body circle
     ctx.fillStyle = isMe ? '#ffffff' : color;
     ctx.globalAlpha = isMe ? 1 : 0.85;
     ctx.beginPath();
@@ -305,13 +325,11 @@ function drawPlayers(state, me) {
     ctx.fill();
     ctx.globalAlpha = 1;
 
-    // Team bandana dot
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(0, 0, 6, 0, Math.PI * 2);
     ctx.fill();
 
-    // Net direction indicator
     ctx.strokeStyle = '#f0e8d0';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -321,13 +339,11 @@ function drawPlayers(state, me) {
 
     ctx.restore();
 
-    // Name tag
     ctx.fillStyle = '#f0f0e0';
     ctx.font = `${isMe ? 'bold ' : ''}11px Georgia`;
     ctx.textAlign = 'center';
     ctx.fillText(p.name, p.x, p.y - PLAYER_RADIUS - 6);
 
-    // Trail count badge
     if (p.trailLength > 0) {
       ctx.fillStyle = color;
       ctx.font = 'bold 10px Georgia';
@@ -336,7 +352,7 @@ function drawPlayers(state, me) {
   }
 }
 
-function drawNotifications(camX, camY) {
+function drawNotifications() {
   const now = performance.now();
   notifications = notifications.filter(n => now - n.born < 1500);
   for (const n of notifications) {

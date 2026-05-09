@@ -2,10 +2,10 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const { COUNTDOWN_SEC, DISCONNECT_HOLD_SEC } = require('./config');
+const { COUNTDOWN_SEC } = require('./config');
 const { generateRoomCode, joinQueue, leaveQueue } = require('./matchmaking');
-const { GameRoom, BASES } = require('./gameState');
-const { OBSTACLES, STREAM_HALF_WIDTH, CROSSING_YS, CROSSING_HALF_HEIGHT } = require('./collision');
+const { GameRoom } = require('./gameState');
+const { listMaps, resolveMap } = require('./maps');
 const gameLoop = require('./gameLoop');
 
 const app = express();
@@ -16,9 +16,13 @@ app.use(express.static(path.join(__dirname, '../client')));
 
 gameLoop.init(io);
 
-const lobbies = {}; // roomCode -> { players: [{id,name,team,ready}], host: socketId }
+// roomCode -> { players, host, mapId }
+// `mapId === null` means "random — server picks at game start".
+const lobbies = {};
 const socketToRoom = {}; // socketId -> roomCode
 const existingCodes = new Set();
+
+const AVAILABLE_MAPS = listMaps();
 
 function getLobby(code) { return lobbies[code]; }
 
@@ -29,12 +33,17 @@ function broadcastLobbyState(code) {
     roomCode: code,
     players: lobby.players,
     host: lobby.host,
+    mapId: lobby.mapId,
+    availableMaps: AVAILABLE_MAPS,
   });
 }
 
 function startGame(code) {
   const lobby = getLobby(code);
   if (!lobby) return;
+
+  // Resolve the map now (random pick happens here if mapId is null/missing).
+  const map = resolveMap(lobby.mapId);
 
   let countdown = COUNTDOWN_SEC;
   io.to(code).emit('game:countdown', { countdown });
@@ -44,15 +53,19 @@ function startGame(code) {
       io.to(code).emit('game:countdown', { countdown });
     } else {
       clearInterval(timer);
-      const room = new GameRoom(code, lobby.players);
+      const room = new GameRoom(code, lobby.players, map);
       gameLoop.addRoom(room);
-      // Send game:start with map data
       io.to(code).emit('game:start', {
-        mapSeed: Math.random(),
         teamAssignments: lobby.players.map(p => ({ id: p.id, team: p.team })),
-        obstacles: OBSTACLES,
-        stream: { halfWidth: STREAM_HALF_WIDTH, crossingYs: CROSSING_YS, crossingHalfHeight: CROSSING_HALF_HEIGHT },
-        bases: BASES,
+        map: {
+          id: map.id,
+          name: map.name,
+          width: map.width,
+          height: map.height,
+          obstacles: map.obstacles,
+          stream: map.stream,
+          bases: map.bases,
+        },
       });
       delete lobbies[code];
     }
@@ -67,6 +80,7 @@ io.on('connection', (socket) => {
       lobbies[code] = {
         players: [{ id: socket.id, name: playerName, team: 'A', ready: false }],
         host: socket.id,
+        mapId: null, // null = random
       };
       socketToRoom[socket.id] = code;
       socket.join(code);
@@ -88,6 +102,22 @@ io.on('connection', (socket) => {
     broadcastLobbyState(roomCode);
   });
 
+  socket.on('lobby:set_map', ({ mapId }) => {
+    const code = socketToRoom[socket.id];
+    const lobby = getLobby(code);
+    if (!lobby || lobby.host !== socket.id) return;
+    // Empty / null / "random" all mean "let the server pick at start".
+    if (!mapId || mapId === 'random') {
+      lobby.mapId = null;
+    } else if (AVAILABLE_MAPS.some(m => m.id === mapId)) {
+      lobby.mapId = mapId;
+    } else {
+      socket.emit('error', { code: 'BAD_MAP', message: 'Unknown map.' });
+      return;
+    }
+    broadcastLobbyState(code);
+  });
+
   socket.on('queue:join', ({ playerName }) => {
     joinQueue(socket, playerName, (matchedPlayers) => {
       const code = generateRoomCode(existingCodes);
@@ -95,6 +125,7 @@ io.on('connection', (socket) => {
       lobbies[code] = {
         players: matchedPlayers.map(p => ({ id: p.socket.id, name: p.playerName, team: p.team, ready: true })),
         host: matchedPlayers[0].socket.id,
+        mapId: null, // public matches always randomise
       };
       for (const mp of matchedPlayers) {
         socketToRoom[mp.socket.id] = code;
@@ -111,7 +142,14 @@ io.on('connection', (socket) => {
     const player = lobby.players.find(p => p.id === socket.id);
     if (player) player.ready = true;
     const allReady = lobby.players.every(p => p.ready);
-    io.to(code).emit('lobby:state', { roomCode: code, players: lobby.players, host: lobby.host, allReady });
+    io.to(code).emit('lobby:state', {
+      roomCode: code,
+      players: lobby.players,
+      host: lobby.host,
+      mapId: lobby.mapId,
+      availableMaps: AVAILABLE_MAPS,
+      allReady,
+    });
   });
 
   socket.on('game:start_request', () => {
@@ -126,7 +164,6 @@ io.on('connection', (socket) => {
     const code = socketToRoom[socket.id];
     const room = gameLoop.getRoom(code);
     if (!room) return;
-    // Server-side validation happens in gameState.applyInput
     room.applyInput(socket.id, dx || 0, dy || 0);
   });
 
@@ -154,11 +191,9 @@ io.on('connection', (socket) => {
     const room = gameLoop.getRoom(code);
     if (room) {
       room.playerDisconnect(socket.id);
-      // Hold slot: reconnect handled on next connection with same name (not implemented for MVP)
     }
   });
 
-  // Reconnect: client can rejoin a room in progress by emitting lobby:join with the code
   socket.on('game:reconnect', ({ roomCode }) => {
     const room = gameLoop.getRoom(roomCode);
     if (!room) { socket.emit('error', { code: 'GAME_NOT_FOUND', message: 'Game not found.' }); return; }

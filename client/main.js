@@ -53,6 +53,10 @@ document.getElementById('btn-start').addEventListener('click', () => {
   socket.emit('game:start_request');
 });
 
+document.getElementById('map-select').addEventListener('change', (e) => {
+  socket.emit('lobby:set_map', { mapId: e.target.value });
+});
+
 document.getElementById('btn-leave').addEventListener('click', () => {
   socket.disconnect();
   location.reload();
@@ -81,7 +85,7 @@ socket.on('game:countdown', ({ countdown }) => {
   UI.showCountdown(countdown);
 });
 
-socket.on('game:start', ({ obstacles, stream, bases, teamAssignments }) => {
+socket.on('game:start', ({ map, teamAssignments }) => {
   const assignment = teamAssignments.find(a => a.id === myId);
   myTeam = assignment ? assignment.team : 'A';
   flowers = [];
@@ -89,7 +93,8 @@ socket.on('game:start', ({ obstacles, stream, bases, teamAssignments }) => {
   signalledReady = false;
   for (const el of document.querySelectorAll('.screen')) el.classList.remove('active');
   UI.showHUD(true);
-  Renderer.init(canvas, obstacles, stream, bases, myId, myTeam);
+  UI.showMapName(map.name);
+  Renderer.init(canvas, map, myId, myTeam);
   Renderer.start();
   Input.init((dx, dy) => socket.emit('player:input', { dx, dy }));
   UI.showCountdown('GO!');
