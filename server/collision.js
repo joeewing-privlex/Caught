@@ -1,42 +1,45 @@
-// Collision helpers parameterised by a map. The map shape is described in
-// server/maps/meadow.js — obstacles, optional stream, dimensions, etc.
+// Tile-grid collision. See spec.md §5.5.
 
-const PLAYER_RADIUS = 16;
+const { TILE_SIZE } = require('./config');
+const { isBlocking, isBase, CELL } = require('./procgen/tiles');
 
-function collidesWithObstacles(x, y, radius, map) {
-  for (const obs of map.obstacles) {
-    const dx = x - obs.x, dy = y - obs.y;
-    const minDist = radius + obs.r;
-    if (dx * dx + dy * dy < minDist * minDist) return obs;
-  }
-  if (map.stream && isBlockedByStream(x, y, radius, map.stream)) return { type: 'stream' };
-  return null;
+const PLAYER_RADIUS = 14;
+const BUTTERFLY_RADIUS = 6;
+
+function circleOverlapsRect(cx, cy, r, rx, ry, rw, rh) {
+  const closestX = Math.max(rx, Math.min(cx, rx + rw));
+  const closestY = Math.max(ry, Math.min(cy, ry + rh));
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  return dx * dx + dy * dy < r * r;
 }
 
-// Streams are line segments with halfWidth and a list of crossings parameterised
-// by `t` (0..1 along the segment) and `halfLen` (gap size along the segment).
-function isBlockedByStream(x, y, radius, stream) {
-  const dx = stream.endX - stream.startX;
-  const dy = stream.endY - stream.startY;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return false;
-  const tRaw = ((x - stream.startX) * dx + (y - stream.startY) * dy) / lenSq;
-  const t = Math.max(0, Math.min(1, tRaw));
-  const cx = stream.startX + t * dx;
-  const cy = stream.startY + t * dy;
-  const perpDist = Math.hypot(x - cx, y - cy);
-  if (perpDist > stream.halfWidth + radius) return false;
-  const len = Math.sqrt(lenSq);
-  for (const c of (stream.crossings || [])) {
-    if (Math.abs(t - c.t) * len < c.halfLen) return false;
+function cellAt(map, tx, ty) {
+  if (tx < 0 || ty < 0 || tx >= map.tilesW || ty >= map.tilesH) return CELL.ROCK; // treat OOB as blocking
+  return map.cells[ty * map.tilesW + tx];
+}
+
+function collidesAt(x, y, radius, map) {
+  const tx0 = Math.floor((x - radius) / TILE_SIZE);
+  const ty0 = Math.floor((y - radius) / TILE_SIZE);
+  const tx1 = Math.floor((x + radius) / TILE_SIZE);
+  const ty1 = Math.floor((y + radius) / TILE_SIZE);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const cell = cellAt(map, tx, ty);
+      if (!isBlocking(cell)) continue;
+      if (circleOverlapsRect(x, y, radius, tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE)) {
+        return true;
+      }
+    }
   }
-  return true;
+  return false;
 }
 
 function resolveObstacleSlide(x, y, nx, ny, radius, map) {
-  if (!collidesWithObstacles(nx, ny, radius, map)) return { x: nx, y: ny };
-  if (!collidesWithObstacles(nx, y,  radius, map)) return { x: nx, y };
-  if (!collidesWithObstacles(x,  ny, radius, map)) return { x,  y: ny };
+  if (!collidesAt(nx, ny, radius, map)) return { x: nx, y: ny };
+  if (!collidesAt(nx, y,  radius, map)) return { x: nx, y };
+  if (!collidesAt(x,  ny, radius, map)) return { x,  y: ny };
   return { x, y };
 }
 
@@ -47,10 +50,28 @@ function clampToMap(x, y, radius, map) {
   };
 }
 
+// True iff a point is on a tile of the given team's base.
+function onBaseTile(x, y, team, map) {
+  const tx = Math.floor(x / TILE_SIZE);
+  const ty = Math.floor(y / TILE_SIZE);
+  const cell = cellAt(map, tx, ty);
+  if (team === 'A') return cell === CELL.BASE_A;
+  if (team === 'B') return cell === CELL.BASE_B;
+  return false;
+}
+
+function onAnyBaseTile(x, y, map) {
+  const tx = Math.floor(x / TILE_SIZE);
+  const ty = Math.floor(y / TILE_SIZE);
+  return isBase(cellAt(map, tx, ty));
+}
+
 module.exports = {
   PLAYER_RADIUS,
-  collidesWithObstacles,
-  isBlockedByStream,
+  BUTTERFLY_RADIUS,
+  collidesAt,
   resolveObstacleSlide,
   clampToMap,
+  onBaseTile,
+  onAnyBaseTile,
 };

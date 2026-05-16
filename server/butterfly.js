@@ -1,5 +1,5 @@
 const { BUTTERFLY_SPEED } = require('./config');
-const { collidesWithObstacles } = require('./collision');
+const { collidesAt, BUTTERFLY_RADIUS } = require('./collision');
 
 let nextId = 1;
 
@@ -21,11 +21,11 @@ function randomType() {
 
 function randomSpawnPos(map) {
   const zones = map.butterflyZones;
-  const zone = zones[Math.floor(Math.random() * zones.length)];
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const zone = zones[Math.floor(Math.random() * zones.length)];
     const x = zone.x + Math.random() * zone.w;
     const y = zone.y + Math.random() * zone.h;
-    if (!collidesWithObstacles(x, y, 8, map)) return { x, y };
+    if (!collidesAt(x, y, BUTTERFLY_RADIUS, map)) return { x, y };
   }
   return { x: map.width / 2, y: map.height / 2 };
 }
@@ -54,8 +54,7 @@ function update(b, dt, map) {
   const nx = b.x + Math.cos(b.angle) * BUTTERFLY_SPEED * dt;
   const ny = b.y + Math.sin(b.angle) * BUTTERFLY_SPEED * dt;
 
-  const hit = collidesWithObstacles(nx, ny, 8, map);
-  if (hit) {
+  if (collidesAt(nx, ny, BUTTERFLY_RADIUS, map)) {
     b.angle = b.angle + Math.PI + (Math.random() - 0.5) * (Math.PI / 3);
     b.turnVel = 0;
   } else {

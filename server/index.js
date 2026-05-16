@@ -2,210 +2,394 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
-const { COUNTDOWN_SEC } = require('./config');
-const { generateRoomCode, joinQueue, leaveQueue } = require('./matchmaking');
-const { GameRoom } = require('./gameState');
-const { listMaps, resolveMap } = require('./maps');
+const { MAX_PLAYERS } = require('./config');
+const { generateRoomCode } = require('./matchmaking');
 const gameLoop = require('./gameLoop');
+const { Series } = require('./series');
+const { ALL_IDS: MUTATOR_IDS } = require('./mutators');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+const io = new Server(server);  // same-origin, no CORS needed on Render
 
 app.use(express.static(path.join(__dirname, '../client')));
 
+// Health endpoint for Render
+app.get('/health', (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    rooms: Object.keys(lobbies).length,
+    activeGames: Object.keys(activeSeries).length,
+    uptime: process.uptime(),
+  });
+});
+
 gameLoop.init(io);
 
-// roomCode -> { players, host, mapId }
-// `mapId === null` means "random — server picks at game start".
+// roomCode -> lobby record. Lobby is the source of truth for who's in the room
+// during pre-game and between rounds. The Series object reads from this lobby.
+//
+// lobby = {
+//   roomCode,
+//   players: [{ clientId, socketId, name, color, team, ready, disconnected, disconnectAt }],
+//   host: clientId,
+//   mutatorPool: string[],
+//   mode: 'lobby' | 'series',
+// }
 const lobbies = {};
-const socketToRoom = {}; // socketId -> roomCode
 const existingCodes = new Set();
+const activeSeries = {};                 // roomCode -> Series
+const socketToClient = {};               // socketId -> clientId
+const clientToRoom = {};                 // clientId -> roomCode
 
-const AVAILABLE_MAPS = listMaps();
+const COLOR_POOL = [
+  'blue', 'brown', 'gray', 'green', 'orange',
+  'pink', 'purple', 'red', 'turquoise', 'yellow',
+];
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getLobby(code) { return lobbies[code]; }
+
+function nextFreeColor(lobby) {
+  const taken = new Set(lobby.players.map(p => p.color));
+  return COLOR_POOL.find(c => !taken.has(c)) || COLOR_POOL[0];
+}
+
+function assignTeamForJoin(lobby) {
+  const a = lobby.players.filter(p => p.team === 'A').length;
+  const b = lobby.players.filter(p => p.team === 'B').length;
+  return a <= b ? 'A' : 'B';
+}
 
 function broadcastLobbyState(code) {
   const lobby = getLobby(code);
   if (!lobby) return;
   io.to(code).emit('lobby:state', {
     roomCode: code,
-    players: lobby.players,
+    players: lobby.players.map(p => ({
+      clientId: p.clientId,
+      name: p.name,
+      color: p.color,
+      team: p.team,
+      ready: p.ready,
+      isHost: p.clientId === lobby.host,
+      disconnected: !!p.disconnected,
+    })),
     host: lobby.host,
-    mapId: lobby.mapId,
-    availableMaps: AVAILABLE_MAPS,
+    mutatorPool: lobby.mutatorPool,
+    availableMutators: MUTATOR_IDS,
+    maxPlayers: MAX_PLAYERS,
+    mode: lobby.mode,
   });
 }
 
-function startGame(code) {
-  const lobby = getLobby(code);
-  if (!lobby) return;
-
-  // Resolve the map now (random pick happens here if mapId is null/missing).
-  const map = resolveMap(lobby.mapId);
-
-  let countdown = COUNTDOWN_SEC;
-  io.to(code).emit('game:countdown', { countdown });
-  const timer = setInterval(() => {
-    countdown--;
-    if (countdown > 0) {
-      io.to(code).emit('game:countdown', { countdown });
-    } else {
-      clearInterval(timer);
-      const room = new GameRoom(code, lobby.players, map);
-      gameLoop.addRoom(room);
-      io.to(code).emit('game:start', {
-        teamAssignments: lobby.players.map(p => ({ id: p.id, team: p.team })),
-        map: {
-          id: map.id,
-          name: map.name,
-          width: map.width,
-          height: map.height,
-          obstacles: map.obstacles,
-          stream: map.stream,
-          bases: map.bases,
-        },
-      });
-      delete lobbies[code];
-    }
-  }, 1000);
+function promoteNewHostIfNeeded(lobby) {
+  const hostPlayer = lobby.players.find(p => p.clientId === lobby.host);
+  if (hostPlayer && !hostPlayer.disconnected) return;
+  const candidate = lobby.players.find(p => !p.disconnected);
+  if (candidate) lobby.host = candidate.clientId;
 }
+
+function tearDownLobby(code) {
+  delete lobbies[code];
+  existingCodes.delete(code);
+  // also clear any clientToRoom entries pointing here
+  for (const [cid, rc] of Object.entries(clientToRoom)) {
+    if (rc === code) delete clientToRoom[cid];
+  }
+}
+
+// ─── Socket handlers ─────────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
-  socket.on('lobby:create', ({ playerName }) => {
-    try {
-      const code = generateRoomCode(existingCodes);
-      existingCodes.add(code);
-      lobbies[code] = {
-        players: [{ id: socket.id, name: playerName, team: 'A', ready: false }],
-        host: socket.id,
-        mapId: null, // null = random
-      };
-      socketToRoom[socket.id] = code;
-      socket.join(code);
-      broadcastLobbyState(code);
-    } catch (e) {
-      socket.emit('error', { code: 'ROOM_ERROR', message: e.message });
-    }
-  });
+  let clientId = null;
+  let displayName = '';
 
-  socket.on('lobby:join', ({ roomCode, playerName }) => {
-    const lobby = getLobby(roomCode);
-    if (!lobby) { socket.emit('error', { code: 'ROOM_NOT_FOUND', message: 'Room not found.' }); return; }
-    if (lobby.players.length >= 8) { socket.emit('error', { code: 'ROOM_FULL', message: 'Room is full.' }); return; }
-
-    const team = lobby.players.filter(p => p.team === 'A').length <= lobby.players.filter(p => p.team === 'B').length ? 'A' : 'B';
-    lobby.players.push({ id: socket.id, name: playerName, team, ready: false });
-    socketToRoom[socket.id] = roomCode;
-    socket.join(roomCode);
-    broadcastLobbyState(roomCode);
-  });
-
-  socket.on('lobby:set_map', ({ mapId }) => {
-    const code = socketToRoom[socket.id];
-    const lobby = getLobby(code);
-    if (!lobby || lobby.host !== socket.id) return;
-    // Empty / null / "random" all mean "let the server pick at start".
-    if (!mapId || mapId === 'random') {
-      lobby.mapId = null;
-    } else if (AVAILABLE_MAPS.some(m => m.id === mapId)) {
-      lobby.mapId = mapId;
-    } else {
-      socket.emit('error', { code: 'BAD_MAP', message: 'Unknown map.' });
+  // First message from any client. Either resumes a held slot or returns "fresh".
+  socket.on('session:hello', (data = {}) => {
+    clientId = data.clientId;
+    displayName = (data.displayName || '').toString().slice(0, 16);
+    if (!clientId) {
+      socket.emit('error', { code: 'NO_CLIENT_ID', message: 'Missing clientId.' });
       return;
     }
+    socketToClient[socket.id] = clientId;
+
+    const existingRoom = clientToRoom[clientId];
+    if (!existingRoom) { socket.emit('session:fresh'); return; }
+
+    const lobby = lobbies[existingRoom];
+    if (!lobby) { socket.emit('session:fresh'); return; }
+
+    const player = lobby.players.find(p => p.clientId === clientId);
+    if (!player) { socket.emit('session:fresh'); return; }
+
+    // Restore: rebind socket, clear disconnect flag
+    player.socketId = socket.id;
+    if (player.disconnected) {
+      player.disconnected = false;
+      player.disconnectAt = null;
+    }
+    if (displayName) player.name = displayName;
+    socket.join(existingRoom);
+
+    const series = activeSeries[existingRoom];
+    if (series && series.currentRoom && series.currentRoom.hasClient(clientId)) {
+      // In-game reconnect — restore in GameRoom
+      series.currentRoom.playerReconnect(clientId, socket.id);
+      socket.emit('session:resumed', {
+        roomCode: existingRoom,
+        role: 'in_game',
+        snapshot: series.currentRoom.getResumeSnapshot(),
+      });
+    } else if (series) {
+      // Series running but they're not in the GameRoom (mid-interstitial join)
+      socket.emit('session:resumed', {
+        roomCode: existingRoom,
+        role: 'in_lobby',
+        snapshot: null,
+      });
+      broadcastLobbyState(existingRoom);
+    } else {
+      socket.emit('session:resumed', {
+        roomCode: existingRoom,
+        role: 'in_lobby',
+        snapshot: null,
+      });
+      broadcastLobbyState(existingRoom);
+    }
+  });
+
+  socket.on('lobby:create', ({ playerName } = {}) => {
+    if (!clientId) { socket.emit('error', { code: 'NO_SESSION', message: 'Send session:hello first.' }); return; }
+    const code = generateRoomCode(existingCodes);
+    existingCodes.add(code);
+    const name = (playerName || displayName || 'player').toString().slice(0, 16);
+    const color = COLOR_POOL[0];
+    const lobby = {
+      roomCode: code,
+      players: [{
+        clientId, socketId: socket.id, name, color,
+        team: 'A', ready: false, disconnected: false, disconnectAt: null,
+      }],
+      host: clientId,
+      mutatorPool: ['none', 'bloom', 'speed', 'sudden'],
+      mode: 'lobby',
+    };
+    lobbies[code] = lobby;
+    clientToRoom[clientId] = code;
+    socket.join(code);
     broadcastLobbyState(code);
   });
 
-  socket.on('queue:join', ({ playerName }) => {
-    joinQueue(socket, playerName, (matchedPlayers) => {
-      const code = generateRoomCode(existingCodes);
-      existingCodes.add(code);
-      lobbies[code] = {
-        players: matchedPlayers.map(p => ({ id: p.socket.id, name: p.playerName, team: p.team, ready: true })),
-        host: matchedPlayers[0].socket.id,
-        mapId: null, // public matches always randomise
-      };
-      for (const mp of matchedPlayers) {
-        socketToRoom[mp.socket.id] = code;
-        mp.socket.join(code);
-      }
-      startGame(code);
-    });
-  });
-
-  socket.on('game:ready', () => {
-    const code = socketToRoom[socket.id];
+  socket.on('lobby:join', ({ roomCode, playerName } = {}) => {
+    if (!clientId) { socket.emit('error', { code: 'NO_SESSION', message: 'Send session:hello first.' }); return; }
+    const code = (roomCode || '').toUpperCase().trim();
     const lobby = getLobby(code);
-    if (!lobby) return;
-    const player = lobby.players.find(p => p.id === socket.id);
-    if (player) player.ready = true;
-    const allReady = lobby.players.every(p => p.ready);
-    io.to(code).emit('lobby:state', {
-      roomCode: code,
-      players: lobby.players,
-      host: lobby.host,
-      mapId: lobby.mapId,
-      availableMaps: AVAILABLE_MAPS,
-      allReady,
-    });
-  });
-
-  socket.on('game:start_request', () => {
-    const code = socketToRoom[socket.id];
-    const lobby = getLobby(code);
-    if (!lobby || lobby.host !== socket.id) return;
-    if (lobby.players.length < 2) { socket.emit('error', { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 2 players.' }); return; }
-    startGame(code);
-  });
-
-  socket.on('player:input', ({ dx, dy }) => {
-    const code = socketToRoom[socket.id];
-    const room = gameLoop.getRoom(code);
-    if (!room) return;
-    room.applyInput(socket.id, dx || 0, dy || 0);
-  });
-
-  socket.on('disconnect', () => {
-    leaveQueue(socket);
-    const code = socketToRoom[socket.id];
-    if (!code) return;
-    delete socketToRoom[socket.id];
-
-    const lobby = getLobby(code);
-    if (lobby) {
-      lobby.players = lobby.players.filter(p => p.id !== socket.id);
-      if (lobby.host === socket.id && lobby.players.length > 0) {
-        lobby.host = lobby.players[0].id;
-      }
-      if (lobby.players.length === 0) {
-        delete lobbies[code];
-        existingCodes.delete(code);
-      } else {
-        broadcastLobbyState(code);
-      }
+    if (!lobby) { socket.emit('error', { code: 'ROOM_NOT_FOUND', message: 'Room not found.' }); return; }
+    if (lobby.players.find(p => p.clientId === clientId)) {
+      // Already in this lobby — just resync state
+      const me = lobby.players.find(p => p.clientId === clientId);
+      me.socketId = socket.id;
+      me.disconnected = false;
+      socket.join(code);
+      broadcastLobbyState(code);
+      return;
+    }
+    const connectedCount = lobby.players.filter(p => !p.disconnected).length;
+    if (connectedCount >= MAX_PLAYERS) {
+      socket.emit('error', { code: 'ROOM_FULL', message: 'Room is full.' });
       return;
     }
 
-    const room = gameLoop.getRoom(code);
-    if (room) {
-      room.playerDisconnect(socket.id);
+    const series = activeSeries[code];
+    if (series && series.phase !== 'interstitial' && series.phase !== 'lobby' && series.phase !== 'ended') {
+      socket.emit('error', { code: 'GAME_IN_PROGRESS', message: 'Round in progress. Try again between rounds.' });
+      return;
     }
+
+    const name = (playerName || displayName || 'player').toString().slice(0, 16);
+    const color = nextFreeColor(lobby);
+    const team = assignTeamForJoin(lobby);
+    const player = {
+      clientId, socketId: socket.id, name, color,
+      team, ready: false, disconnected: false, disconnectAt: null,
+    };
+    lobby.players.push(player);
+    clientToRoom[clientId] = code;
+    socket.join(code);
+
+    // If a series is in interstitial, register this as a late-join
+    if (series && series.phase === 'interstitial') {
+      series.acceptLateJoin({ ...player, socketId: socket.id });
+    }
+
+    broadcastLobbyState(code);
   });
 
-  socket.on('game:reconnect', ({ roomCode }) => {
-    const room = gameLoop.getRoom(roomCode);
-    if (!room) { socket.emit('error', { code: 'GAME_NOT_FOUND', message: 'Game not found.' }); return; }
-    const ok = room.playerReconnect(socket.id);
-    if (ok) {
-      socketToRoom[socket.id] = roomCode;
-      socket.join(roomCode);
-    } else {
-      socket.emit('error', { code: 'RECONNECT_FAILED', message: 'Reconnect window expired.' });
+  socket.on('lobby:set_color', ({ color } = {}) => {
+    const code = clientToRoom[clientId];
+    const lobby = getLobby(code);
+    if (!lobby) return;
+    if (!COLOR_POOL.includes(color)) return;
+    if (lobby.players.find(p => p.color === color && p.clientId !== clientId)) {
+      socket.emit('error', { code: 'COLOR_TAKEN', message: 'That color is taken.' });
+      return;
     }
+    const me = lobby.players.find(p => p.clientId === clientId);
+    if (me) me.color = color;
+    broadcastLobbyState(code);
+  });
+
+  socket.on('lobby:set_team', ({ team } = {}) => {
+    const code = clientToRoom[clientId];
+    const lobby = getLobby(code);
+    if (!lobby) return;
+    if (team !== 'A' && team !== 'B') return;
+    const me = lobby.players.find(p => p.clientId === clientId);
+    if (!me) return;
+    // Only allow self-swap if it doesn't make the team imbalance worse
+    const otherTeam = me.team;
+    if (team === otherTeam) return;
+    const a = lobby.players.filter(p => p.team === 'A').length;
+    const b = lobby.players.filter(p => p.team === 'B').length;
+    const after = team === 'A' ? { a: a + 1, b: b - 1 } : { a: a - 1, b: b + 1 };
+    if (Math.abs(after.a - after.b) > Math.abs(a - b) + 1) {
+      socket.emit('error', { code: 'TEAM_IMBALANCE', message: 'That would imbalance the teams.' });
+      return;
+    }
+    me.team = team;
+    broadcastLobbyState(code);
+  });
+
+  socket.on('lobby:set_mutator_pool', ({ mutators } = {}) => {
+    const code = clientToRoom[clientId];
+    const lobby = getLobby(code);
+    if (!lobby || lobby.host !== clientId) return;
+    const valid = (Array.isArray(mutators) ? mutators : []).filter(m => MUTATOR_IDS.includes(m));
+    if (valid.length === 0) {
+      socket.emit('error', { code: 'EMPTY_POOL', message: 'Pick at least one mutator.' });
+      return;
+    }
+    lobby.mutatorPool = valid;
+    broadcastLobbyState(code);
+  });
+
+  socket.on('game:start_request', () => {
+    const code = clientToRoom[clientId];
+    const lobby = getLobby(code);
+    if (!lobby || lobby.host !== clientId) return;
+    if (activeSeries[code]) { socket.emit('error', { code: 'ALREADY_RUNNING', message: 'Series already started.' }); return; }
+    const connected = lobby.players.filter(p => !p.disconnected);
+    if (connected.length < 2) {
+      socket.emit('error', { code: 'NOT_ENOUGH_PLAYERS', message: 'Need at least 2 players.' });
+      return;
+    }
+    startSeries(code);
+  });
+
+  socket.on('series:ready_next', () => {
+    const code = clientToRoom[clientId];
+    const series = activeSeries[code];
+    if (!series) return;
+    series.readyForNext(clientId);
+  });
+
+  socket.on('player:input', ({ dx, dy } = {}) => {
+    const code = clientToRoom[clientId];
+    const series = activeSeries[code];
+    if (!series || !series.currentRoom) return;
+    series.currentRoom.applyInputByClientId(clientId, dx || 0, dy || 0);
+  });
+
+  socket.on('lobby:leave', () => {
+    const code = clientToRoom[clientId];
+    if (!code) return;
+    removePlayerFromLobby(code, clientId, /* immediate */ true);
+    socket.leave(code);
+  });
+
+  socket.on('disconnect', () => {
+    if (!clientId) return;
+    delete socketToClient[socket.id];
+    const code = clientToRoom[clientId];
+    if (!code) return;
+    const lobby = getLobby(code);
+    if (!lobby) return;
+
+    const player = lobby.players.find(p => p.clientId === clientId);
+    if (!player) return;
+
+    player.disconnected = true;
+    player.disconnectAt = Date.now();
+
+    // If they're in an active GameRoom, hand off to the room's disconnect handling
+    const series = activeSeries[code];
+    if (series && series.currentRoom && series.currentRoom.hasClient(clientId)) {
+      series.currentRoom.playerDisconnect(clientId);
+    }
+
+    // Host transfer if needed
+    promoteNewHostIfNeeded(lobby);
+
+    // Schedule slot reaping after DISCONNECT_HOLD_SEC if they don't return
+    setTimeout(() => reapIfStillDisconnected(code, clientId), require('./config').DISCONNECT_HOLD_SEC * 1000);
+
+    broadcastLobbyState(code);
   });
 });
 
+function removePlayerFromLobby(code, clientId, immediate) {
+  const lobby = getLobby(code);
+  if (!lobby) return;
+  lobby.players = lobby.players.filter(p => p.clientId !== clientId);
+  if (clientToRoom[clientId] === code) delete clientToRoom[clientId];
+
+  if (lobby.players.length === 0) {
+    if (activeSeries[code]) {
+      // Series is running but everyone left — let it tear down via its own end path
+      activeSeries[code] = null;
+      delete activeSeries[code];
+    }
+    tearDownLobby(code);
+    return;
+  }
+  if (lobby.host === clientId) promoteNewHostIfNeeded(lobby);
+  broadcastLobbyState(code);
+}
+
+function reapIfStillDisconnected(code, clientId) {
+  const lobby = getLobby(code);
+  if (!lobby) return;
+  const player = lobby.players.find(p => p.clientId === clientId);
+  if (!player || !player.disconnected) return;
+  removePlayerFromLobby(code, clientId, false);
+}
+
+function startSeries(code) {
+  const lobby = getLobby(code);
+  if (!lobby) return;
+  lobby.mode = 'series';
+  const series = new Series({
+    roomCode: code,
+    lobby,
+    mutatorPool: lobby.mutatorPool,
+    gameLoop,
+    io,
+    onSeriesEnd: () => {
+      delete activeSeries[code];
+      lobby.mode = 'lobby';
+      // Keep the lobby alive so players can start a new series
+      // (the client gets a series:end event and can show "play another series")
+      // Reset ready flags
+      for (const p of lobby.players) p.ready = false;
+      broadcastLobbyState(code);
+    },
+  });
+  activeSeries[code] = series;
+  series.startSeries();
+}
+
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Butterfly Duel server on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`Caught server on http://localhost:${PORT}`));

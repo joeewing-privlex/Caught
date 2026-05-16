@@ -1,6 +1,6 @@
 const { TICK_RATE } = require('./config');
 
-const rooms = {}; // roomCode -> GameRoom
+const rooms = {};     // roomCode -> { room, onEnded }
 let io = null;
 let interval = null;
 
@@ -9,9 +9,9 @@ function init(ioInstance) {
   interval = setInterval(tick, 1000 / TICK_RATE);
 }
 
-function addRoom(room) {
+function addRoom(room, onEnded) {
   room.setIO(io);
-  rooms[room.roomCode] = room;
+  rooms[room.roomCode] = { room, onEnded };
 }
 
 function removeRoom(code) {
@@ -19,20 +19,22 @@ function removeRoom(code) {
 }
 
 function getRoom(code) {
-  return rooms[code] || null;
+  const entry = rooms[code];
+  return entry ? entry.room : null;
 }
 
 function tick() {
   const dt = 1 / TICK_RATE;
-  for (const room of Object.values(rooms)) {
+  for (const code of Object.keys(rooms)) {
+    const entry = rooms[code];
+    const { room, onEnded } = entry;
     room.update(dt);
     const state = room.getTickState();
     io.to(room.roomCode).emit('game:tick', state);
 
     if (room.phase === 'ended') {
-      const winner = room.scores.A > room.scores.B ? 'A' : room.scores.B > room.scores.A ? 'B' : 'draw';
-      io.to(room.roomCode).emit('game:end', { scores: room.scores, winner });
-      removeRoom(room.roomCode);
+      removeRoom(code);
+      if (onEnded) onEnded();
     }
   }
 }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Butterfly Duel</title>
+  <title>Caught</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #1a2e1a; font-family: 'Georgia', serif; color: #f0e8d0; overflow: hidden; }
@@ -12,86 +12,111 @@
 
     .screen { display: none; flex-direction: column; align-items: center; gap: 16px;
       background: rgba(20,40,20,0.95); border: 3px solid #5a8a3a; border-radius: 12px;
-      padding: 40px 48px; min-width: 380px; box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
+      padding: 32px 40px; min-width: 420px; max-width: 92vw; max-height: 92vh; overflow-y: auto;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6); }
     .screen.active { display: flex; }
 
     h1 { font-size: 2.4rem; color: #a8d070; text-shadow: 0 2px 8px rgba(0,0,0,0.5); }
-    h2 { font-size: 1.5rem; color: #c8e090; }
-    p  { color: #c0d0a0; font-size: 0.95rem; text-align: center; }
+    h2 { font-size: 1.4rem; color: #c8e090; }
+    h3 { font-size: 1.05rem; color: #c8e090; margin-top: 8px; }
+    p  { color: #c0d0a0; font-size: 0.92rem; text-align: center; }
 
-    input { width: 100%; padding: 10px 14px; border-radius: 6px; border: 2px solid #5a8a3a;
+    input, select { width: 100%; padding: 10px 14px; border-radius: 6px; border: 2px solid #5a8a3a;
       background: #0f1f0f; color: #f0e8d0; font-size: 1rem; font-family: inherit; }
-    input:focus { outline: none; border-color: #a8d070; }
+    input:focus, select:focus { outline: none; border-color: #a8d070; }
 
-    button { width: 100%; padding: 12px; border-radius: 6px; border: none; cursor: pointer;
-      font-size: 1rem; font-family: inherit; font-weight: bold; transition: filter 0.15s; }
+    button { width: 100%; padding: 11px; border-radius: 6px; border: none; cursor: pointer;
+      font-size: 0.95rem; font-family: inherit; font-weight: bold; transition: filter 0.15s; }
     button:hover { filter: brightness(1.15); }
     button:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
     .btn-primary   { background: #4a8a2a; color: #f0f8e0; }
     .btn-secondary { background: #2a5a1a; color: #c0d8a0; }
     .btn-danger    { background: #8a3a2a; color: #f8e0d0; }
 
+    /* Lobby */
     #lobby-players { width: 100%; }
-    .lobby-player { display: flex; justify-content: space-between; padding: 6px 10px;
+    .lobby-player { display: flex; align-items: center; gap: 8px; padding: 6px 10px;
       border-radius: 4px; margin: 4px 0; font-size: 0.9rem; }
     .lobby-player.team-a { background: rgba(50,100,200,0.25); border-left: 3px solid #4080ff; }
     .lobby-player.team-b { background: rgba(200,50,50,0.25); border-left: 3px solid #ff4040; }
-    .host-badge { font-size: 0.75rem; color: #ffd060; }
+    .lobby-player .name { flex: 1; }
+    .lobby-player.disc .name { opacity: 0.5; font-style: italic; }
+    .swatch { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(0,0,0,0.4); display: inline-block; }
+    .host-badge { font-size: 0.7rem; color: #ffd060; padding: 2px 6px; border: 1px solid #ffd060; border-radius: 3px; }
+    .team-swap-btn { width: auto; padding: 4px 10px; font-size: 0.8rem; background: rgba(255,255,255,0.1); color: #f0e8d0; }
+
+    /* Color picker */
+    .color-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; width: 100%; }
+    .color-swatch { width: 100%; aspect-ratio: 1; border-radius: 50%; cursor: pointer; border: 3px solid rgba(0,0,0,0.4);
+      transition: transform 0.1s, border-color 0.1s; }
+    .color-swatch:hover { transform: scale(1.08); }
+    .color-swatch.taken { opacity: 0.25; cursor: not-allowed; }
+    .color-swatch.mine { border-color: #ffd060; box-shadow: 0 0 0 2px rgba(255,208,96,0.4); }
+    .swatch-blue      { background: #5a8ad0; }
+    .swatch-brown     { background: #8a6042; }
+    .swatch-gray      { background: #8090a0; }
+    .swatch-green     { background: #6aa040; }
+    .swatch-orange    { background: #e08840; }
+    .swatch-pink      { background: #e890b8; }
+    .swatch-purple    { background: #9060c0; }
+    .swatch-red       { background: #d04040; }
+    .swatch-turquoise { background: #40b0a8; }
+    .swatch-yellow    { background: #e0c040; }
+
+    /* Mutator pool */
+    .mutator-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+    .mutator-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,0.04); }
+    .mutator-row input { width: auto; margin: 0; }
+    .mutator-row .desc { color: #a0b080; font-size: 0.78rem; flex: 1; }
+    .mutator-row .name { font-weight: bold; color: #c8e090; min-width: 130px; }
 
     #room-code-display { font-size: 2rem; letter-spacing: 0.2em; color: #ffd060; font-weight: bold; }
-    #error-msg { color: #ff8080; font-size: 0.9rem; min-height: 1.2em; }
+    [id^="error-msg"] { color: #ff8080; font-size: 0.85rem; min-height: 1.1em; }
 
-    /* Game HUD */
+    /* HUD */
     #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; display: none; }
-    #score-a { position: absolute; top: 16px; left: 20px; font-size: 1.3rem; color: #80b0ff; }
-    #score-b { position: absolute; top: 16px; right: 20px; font-size: 1.3rem; color: #ff8080; }
-    #timer    { position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
-      font-size: 1.5rem; color: #ffd060; font-weight: bold; }
-    #powerup-hud { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+    #score-a { position: absolute; top: 12px; left: 16px; font-size: 1.2rem; color: #80b0ff;
+      background: rgba(0,0,0,0.4); padding: 4px 10px; border-radius: 6px; }
+    #score-b { position: absolute; top: 12px; right: 16px; font-size: 1.2rem; color: #ff8080;
+      background: rgba(0,0,0,0.4); padding: 4px 10px; border-radius: 6px; }
+    #timer    { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      font-size: 1.4rem; color: #ffd060; font-weight: bold;
+      background: rgba(0,0,0,0.4); padding: 4px 14px; border-radius: 6px; }
+    #mutator-badge { position: absolute; top: 60px; left: 50%; transform: translateX(-50%);
+      font-size: 0.85rem; color: #a8d070; background: rgba(0,0,0,0.35); padding: 3px 10px; border-radius: 4px; }
+    #round-badge { position: absolute; top: 92px; left: 50%; transform: translateX(-50%);
+      font-size: 0.78rem; color: #c0d0a0; }
+    #powerup-hud { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
       display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.5);
-      padding: 8px 16px; border-radius: 8px; }
-    #powerup-icon { font-size: 1.4rem; }
-    #powerup-bar-wrap { width: 100px; height: 10px; background: rgba(255,255,255,0.2); border-radius: 5px; overflow: hidden; }
+      padding: 6px 14px; border-radius: 8px; }
+    #powerup-icon { font-size: 1.3rem; }
+    #powerup-bar-wrap { width: 100px; height: 8px; background: rgba(255,255,255,0.2); border-radius: 5px; overflow: hidden; }
     #powerup-bar { height: 100%; background: #a8d070; border-radius: 5px; transition: width 0.1s; }
+    #conn-dot { position: absolute; top: 12px; left: 50%; transform: translateX(140px); width: 10px; height: 10px;
+      border-radius: 50%; background: #6ad06a; transition: background-color 0.3s; }
+    #conn-dot.warn { background: #e0c040; }
+    #conn-dot.dead { background: #d04040; }
 
     #countdown-overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
       font-size: 8rem; color: #ffd060; text-shadow: 0 4px 16px rgba(0,0,0,0.8); z-index: 20;
       pointer-events: none; opacity: 0; transition: opacity 0.3s; }
     #countdown-overlay.show { opacity: 1; }
 
-    #map-name-banner { position: fixed; top: 80px; left: 50%; transform: translateX(-50%);
-      font-size: 1.6rem; color: #ffd060; text-shadow: 0 2px 8px rgba(0,0,0,0.7); z-index: 18;
-      pointer-events: none; opacity: 0; transition: opacity 0.4s; padding: 6px 18px;
-      background: rgba(20,40,20,0.7); border-radius: 8px; }
-    #map-name-banner.show { opacity: 1; }
+    #reconnect-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.5); z-index: 30; flex-direction: column; gap: 12px; }
+    #reconnect-overlay.show { display: flex; }
+    #reconnect-overlay h2 { color: #e0c040; }
 
-    .map-picker { display: flex; gap: 10px; align-items: center; width: 100%; margin: 6px 0; }
-    .map-picker label { font-size: 0.9rem; color: #c8e090; }
-    .map-picker select { flex: 1; padding: 8px 10px; border-radius: 6px; border: 2px solid #5a8a3a;
-      background: #0f1f0f; color: #f0e8d0; font-size: 0.95rem; font-family: inherit; cursor: pointer; }
-    .map-picker select:disabled { opacity: 0.6; cursor: not-allowed; }
-    .map-picker select:focus { outline: none; border-color: #a8d070; }
-
-    /* End screen */
-    #end-screen .final-scores { display: flex; gap: 40px; margin: 8px 0; }
-    .score-block { text-align: center; }
-    .score-block .team-label { font-size: 0.9rem; color: #a0b080; }
-    .score-block .score-num  { font-size: 3rem; font-weight: bold; }
-    .score-block.winner .score-num { color: #ffd060; }
+    /* Series interstitial */
+    #screen-interstitial .standings { width: 100%; max-height: 280px; overflow-y: auto; }
+    .standing-row { display: flex; gap: 8px; padding: 5px 8px; border-radius: 4px; background: rgba(255,255,255,0.04); margin: 2px 0;
+      font-size: 0.85rem; align-items: center; }
+    .standing-row .rank { width: 24px; color: #ffd060; }
+    .standing-row .name { flex: 1; }
+    .standing-row .stat { width: 50px; text-align: right; color: #a0b080; font-variant-numeric: tabular-nums; }
+    .standing-row.mine { background: rgba(168,208,112,0.15); }
 
     canvas { display: block; position: fixed; inset: 0; }
-
-    /* Mobile D-pad */
-    #dpad { position: fixed; bottom: 30px; right: 30px; z-index: 6; display: none;
-      width: 130px; height: 130px; pointer-events: all; }
-    #dpad button { position: absolute; width: 40px; height: 40px; border-radius: 6px;
-      background: rgba(255,255,255,0.2); border: 2px solid rgba(255,255,255,0.4);
-      color: white; font-size: 1.2rem; display: flex; align-items: center; justify-content: center;
-      width: 40px; padding: 0; }
-    #dpad-up    { top: 0;  left: 45px; }
-    #dpad-down  { bottom: 0; left: 45px; }
-    #dpad-left  { left: 0; top: 45px; }
-    #dpad-right { right: 0; top: 45px; }
   </style>
 </head>
 <body>
@@ -99,35 +124,40 @@
 <canvas id="canvas"></canvas>
 
 <div id="countdown-overlay"></div>
-<div id="map-name-banner"></div>
 
 <div id="hud">
-  <div id="score-a">🦋 Team A: <span id="score-a-val">0</span></div>
-  <div id="score-b">Team B: <span id="score-b-val">0</span> 🦋</div>
-  <div id="timer">2:00</div>
+  <div id="score-a">A: <span id="score-a-val">0</span></div>
+  <div id="score-b">B: <span id="score-b-val">0</span></div>
+  <div id="timer">3:00</div>
+  <div id="mutator-badge"></div>
+  <div id="round-badge"></div>
+  <div id="conn-dot" title="connection"></div>
   <div id="powerup-hud" style="display:none">
     <span id="powerup-icon"></span>
     <div id="powerup-bar-wrap"><div id="powerup-bar" style="width:100%"></div></div>
   </div>
 </div>
 
-<div id="dpad">
-  <button id="dpad-up">▲</button>
-  <button id="dpad-left">◀</button>
-  <button id="dpad-right">▶</button>
-  <button id="dpad-down">▼</button>
+<div id="reconnect-overlay">
+  <h2>Reconnecting…</h2>
+  <p id="reconnect-msg">Trying to restore your session.</p>
 </div>
 
 <div id="screens">
+  <!-- Boot/loading -->
+  <div id="screen-boot" class="screen active">
+    <h1>🦋 Caught</h1>
+    <p id="boot-msg">Waking up the server…</p>
+  </div>
+
   <!-- Main menu -->
-  <div id="screen-menu" class="screen active">
-    <h1>🦋 Butterfly Duel</h1>
-    <p>Collect butterflies. Bank them. Steal from your rivals.</p>
+  <div id="screen-menu" class="screen">
+    <h1>🦋 Caught</h1>
+    <p>Catch butterflies, bank them, steal from your rivals.</p>
     <input id="player-name" type="text" placeholder="Your name" maxlength="16" />
     <div id="error-msg"></div>
     <button class="btn-primary" id="btn-create">Create Private Room</button>
     <button class="btn-secondary" id="btn-join-toggle">Join with Room Code</button>
-    <button class="btn-secondary" id="btn-queue">Join Public Queue</button>
   </div>
 
   <!-- Join by code -->
@@ -143,40 +173,36 @@
   <div id="screen-lobby" class="screen">
     <h2>Lobby</h2>
     <div id="room-code-display"></div>
-    <p style="font-size:0.8rem;color:#a0b080">Share this code with friends</p>
+    <p style="font-size:0.78rem;color:#a0b080">Share this code with friends</p>
     <div id="lobby-players"></div>
-    <div class="map-picker">
-      <label for="map-select">Map</label>
-      <select id="map-select"></select>
-    </div>
+    <h3>Your color</h3>
+    <div class="color-grid" id="color-grid"></div>
+    <h3 id="mutator-pool-header" style="display:none">Mutator pool (host)</h3>
+    <div class="mutator-list" id="mutator-list" style="display:none"></div>
     <div id="error-msg-lobby"></div>
-    <button class="btn-primary" id="btn-start" style="display:none">Start Game</button>
+    <button class="btn-primary" id="btn-start" style="display:none">Start Series</button>
     <p id="waiting-msg" style="color:#a0b080;font-size:0.9rem"></p>
     <button class="btn-danger" id="btn-leave">Leave</button>
   </div>
 
-  <!-- End screen -->
-  <div id="screen-end" class="screen">
-    <h1 id="end-title"></h1>
-    <div class="final-scores">
-      <div class="score-block" id="end-score-a">
-        <div class="team-label">Team A</div>
-        <div class="score-num" id="end-score-a-val">0</div>
-      </div>
-      <div class="score-block" id="end-score-b">
-        <div class="team-label">Team B</div>
-        <div class="score-num" id="end-score-b-val">0</div>
-      </div>
-    </div>
-    <p id="end-countdown-msg"></p>
-    <button class="btn-primary" id="btn-play-again">Back to Menu</button>
+  <!-- Interstitial (between rounds) -->
+  <div id="screen-interstitial" class="screen">
+    <h2 id="interstitial-title">Round 1 complete</h2>
+    <p id="interstitial-scores"></p>
+    <h3>Standings</h3>
+    <div class="standings" id="standings-list"></div>
+    <h3>Next round</h3>
+    <p id="next-mutator-info"></p>
+    <p id="interstitial-countdown" style="color:#ffd060;font-weight:bold"></p>
+    <button class="btn-primary" id="btn-ready-next">Ready for next round</button>
   </div>
 
-  <!-- Queue waiting -->
-  <div id="screen-queue" class="screen">
-    <h2>Finding a Match…</h2>
-    <p id="queue-status">Waiting for players…</p>
-    <button class="btn-danger" id="btn-leave-queue">Leave Queue</button>
+  <!-- Series end -->
+  <div id="screen-series-end" class="screen">
+    <h1 id="series-end-title">Series complete</h1>
+    <h3>Final standings</h3>
+    <div class="standings" id="final-standings-list"></div>
+    <button class="btn-primary" id="btn-back-to-lobby">Back to Lobby</button>
   </div>
 </div>
 

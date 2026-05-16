@@ -1,15 +1,26 @@
-const screens = {};
+// UI helpers — screen visibility, lobby rendering, standings, countdowns.
+
+import { COLORS } from './sprites.js';
+
+const MUTATOR_DESCRIPTIONS = {
+  none:   { name: 'None',            desc: 'Baseline rules.' },
+  bloom:  { name: 'Butterfly Bloom', desc: 'Twice as many butterflies.' },
+  speed:  { name: 'Speed Demons',    desc: '30% faster movement.' },
+  sudden: { name: 'Sudden Death',    desc: 'Short round, points doubled.' },
+};
 
 export function init() {
-  for (const el of document.querySelectorAll('.screen')) {
-    screens[el.id] = el;
-  }
+  // Boot screen is active by default in HTML.
 }
 
 export function show(id) {
-  for (const el of Object.values(screens)) el.classList.remove('active');
-  const target = screens[id] || screens['screen-menu'];
-  target.classList.add('active');
+  for (const el of document.querySelectorAll('.screen')) el.classList.remove('active');
+  const target = document.getElementById(id);
+  if (target) target.classList.add('active');
+}
+
+export function showHUD(on) {
+  document.getElementById('hud').style.display = on ? 'block' : 'none';
 }
 
 export function setError(elId, msg) {
@@ -17,78 +28,158 @@ export function setError(elId, msg) {
   if (el) el.textContent = msg || '';
 }
 
-export function renderLobby({ roomCode, players, host, allReady, mapId, availableMaps }, myId) {
-  document.getElementById('room-code-display').textContent = roomCode || '';
-  const container = document.getElementById('lobby-players');
-  container.innerHTML = '';
-  for (const p of (players || [])) {
-    const div = document.createElement('div');
-    div.className = `lobby-player team-${p.team.toLowerCase()}`;
-    div.innerHTML = `<span>${p.name}${p.id === host ? ' <span class="host-badge">HOST</span>' : ''}</span><span>Team ${p.team}${p.ready ? ' ✓' : ''}</span>`;
-    container.appendChild(div);
-  }
+export function setBootMessage(msg) {
+  const el = document.getElementById('boot-msg');
+  if (el) el.textContent = msg;
+}
 
-  // Map picker — only host can interact, others see the host's selection.
-  const sel = document.getElementById('map-select');
-  if (availableMaps && sel.options.length !== availableMaps.length + 1) {
-    sel.innerHTML = '';
-    const randomOpt = document.createElement('option');
-    randomOpt.value = 'random';
-    randomOpt.textContent = '🎲 Random';
-    sel.appendChild(randomOpt);
-    for (const m of availableMaps) {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.name;
-      sel.appendChild(opt);
+export function showCountdown(text) {
+  const el = document.getElementById('countdown-overlay');
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 800);
+}
+
+export function showReconnectOverlay(on, msg) {
+  const el = document.getElementById('reconnect-overlay');
+  if (!el) return;
+  el.classList.toggle('show', !!on);
+  if (msg) document.getElementById('reconnect-msg').textContent = msg;
+}
+
+export function renderLobby(data, myClientId) {
+  document.getElementById('room-code-display').textContent = data.roomCode;
+
+  // Players list
+  const list = document.getElementById('lobby-players');
+  list.innerHTML = '';
+  for (const p of data.players) {
+    const row = document.createElement('div');
+    row.className = `lobby-player team-${p.team.toLowerCase()}${p.disconnected ? ' disc' : ''}`;
+    row.innerHTML = `
+      <span class="swatch swatch-${p.color}"></span>
+      <span class="name">${escapeHTML(p.name)}${p.disconnected ? ' (offline)' : ''}</span>
+      ${p.isHost ? '<span class="host-badge">HOST</span>' : ''}
+    `;
+    if (p.clientId === myClientId) {
+      const swap = document.createElement('button');
+      swap.className = 'team-swap-btn';
+      swap.textContent = 'Swap team';
+      swap.dataset.action = 'swap-team';
+      row.appendChild(swap);
     }
+    list.appendChild(row);
   }
-  sel.value = mapId || 'random';
-  sel.disabled = myId !== host;
 
+  // Color picker
+  const grid = document.getElementById('color-grid');
+  grid.innerHTML = '';
+  const takenColors = new Set(data.players.filter(p => p.clientId !== myClientId).map(p => p.color));
+  const me = data.players.find(p => p.clientId === myClientId);
+  for (const c of COLORS) {
+    const sw = document.createElement('div');
+    sw.className = `color-swatch swatch-${c}`;
+    sw.dataset.color = c;
+    if (takenColors.has(c)) sw.classList.add('taken');
+    if (me && me.color === c) sw.classList.add('mine');
+    grid.appendChild(sw);
+  }
+
+  // Mutator pool (host only)
+  const muHeader = document.getElementById('mutator-pool-header');
+  const muList = document.getElementById('mutator-list');
+  if (me && me.isHost) {
+    muHeader.style.display = '';
+    muList.style.display = '';
+    muList.innerHTML = '';
+    const pool = new Set(data.mutatorPool || []);
+    for (const id of (data.availableMutators || [])) {
+      const m = MUTATOR_DESCRIPTIONS[id] || { name: id, desc: '' };
+      const row = document.createElement('label');
+      row.className = 'mutator-row';
+      row.innerHTML = `
+        <input type="checkbox" data-mutator="${id}" ${pool.has(id) ? 'checked' : ''} />
+        <span class="name">${m.name}</span>
+        <span class="desc">${m.desc}</span>
+      `;
+      muList.appendChild(row);
+    }
+  } else {
+    muHeader.style.display = 'none';
+    muList.style.display = 'none';
+  }
+
+  // Start button — host only, and only if 2+ connected
   const startBtn = document.getElementById('btn-start');
-  const waitMsg  = document.getElementById('waiting-msg');
-  if (myId === host) {
-    startBtn.style.display = allReady && players.length >= 2 ? 'block' : 'none';
-    waitMsg.textContent = allReady ? '' : 'Waiting for all players to ready up…';
+  const connectedCount = data.players.filter(p => !p.disconnected).length;
+  if (me && me.isHost) {
+    startBtn.style.display = '';
+    startBtn.disabled = connectedCount < 2;
   } else {
     startBtn.style.display = 'none';
-    waitMsg.textContent = 'Waiting for host to start…';
+  }
+  document.getElementById('waiting-msg').textContent =
+    connectedCount < 2 ? 'Waiting for at least 2 players…' :
+    (me && !me.isHost) ? 'Waiting for host to start the series.' : '';
+}
+
+export function renderInterstitial(data, myClientId) {
+  document.getElementById('interstitial-title').textContent =
+    `Round ${data.roundIndex} of ${data.totalRounds} complete`;
+
+  const sc = data.lastRoundScores || { A: 0, B: 0 };
+  const win = data.lastWinningTeam;
+  document.getElementById('interstitial-scores').textContent =
+    `Team A ${sc.A}  ·  Team B ${sc.B}` + (win === 'draw' ? ' — draw' : `  ·  Team ${win} took the round`);
+
+  renderStandings('standings-list', data.standings, myClientId);
+
+  const nm = data.nextMutator || {};
+  document.getElementById('next-mutator-info').innerHTML =
+    `Next mutator: <strong>${escapeHTML(nm.name || 'None')}</strong> — ${escapeHTML(nm.description || '')}`;
+
+  document.getElementById('interstitial-countdown').textContent =
+    `Next round in ${data.interstitialSec || 20}s, or when everyone's ready.`;
+}
+
+export function renderSeriesEnd(data, myClientId) {
+  renderStandings('final-standings-list', data.standings, myClientId);
+  const top = data.standings[0];
+  if (top) {
+    document.getElementById('series-end-title').textContent =
+      `🏆 ${top.name} wins the series!`;
   }
 }
 
-export function showCountdown(n) {
-  const el = document.getElementById('countdown-overlay');
-  el.textContent = n > 0 ? n : 'GO!';
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 800);
+function renderStandings(containerId, standings, myClientId) {
+  const c = document.getElementById(containerId);
+  c.innerHTML = '';
+  const header = document.createElement('div');
+  header.className = 'standing-row';
+  header.style.fontWeight = 'bold';
+  header.innerHTML = `
+    <span class="rank">#</span><span class="name">Player</span>
+    <span class="stat">Bank</span><span class="stat">Stole</span><span class="stat">Lost</span><span class="stat">MVP</span>
+  `;
+  c.appendChild(header);
+  standings.forEach((s, i) => {
+    const row = document.createElement('div');
+    row.className = `standing-row${s.clientId === myClientId ? ' mine' : ''}`;
+    row.innerHTML = `
+      <span class="rank">${i + 1}</span>
+      <span class="name">${escapeHTML(s.name)}</span>
+      <span class="stat">${s.banked}</span>
+      <span class="stat">${s.stolen}</span>
+      <span class="stat">${s.lost}</span>
+      <span class="stat">${s.mvps}</span>
+    `;
+    c.appendChild(row);
+  });
 }
 
-export function showMapName(name) {
-  const el = document.getElementById('map-name-banner');
-  if (!el) return;
-  el.textContent = name;
-  el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2500);
-}
-
-export function showEndScreen({ scores, winner }, myTeam) {
-  show('screen-end');
-  const titles = { A: '🏆 Team A Wins!', B: '🏆 Team B Wins!', draw: "It's a Draw!" };
-  document.getElementById('end-title').textContent = titles[winner] || 'Game Over';
-  document.getElementById('end-score-a-val').textContent = scores.A;
-  document.getElementById('end-score-b-val').textContent = scores.B;
-  document.getElementById('end-score-a').classList.toggle('winner', winner === 'A');
-  document.getElementById('end-score-b').classList.toggle('winner', winner === 'B');
-
-  let sec = 10;
-  const msg = document.getElementById('end-countdown-msg');
-  const tick = setInterval(() => {
-    msg.textContent = `Returning to menu in ${sec--}s…`;
-    if (sec < 0) { clearInterval(tick); show('screen-menu'); }
-  }, 1000);
-}
-
-export function showHUD(visible) {
-  document.getElementById('hud').style.display = visible ? 'block' : 'none';
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
 }
