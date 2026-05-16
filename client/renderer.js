@@ -344,48 +344,73 @@ export function updateHUD(state, myPowerup, myPowerupRemaining, myPowerupMax) {
 
 // ── Fog (PNW atmosphere) ──────────────────────────────────────────────────
 //
-// Two passes:
-//   1. A vignette: subtle white mist at the screen edges, denser in corners.
-//   2. A few large drifting fog patches that slowly cross the viewport.
+// Four passes, drawn in screen space after the world ctx.restore():
+//   1. Cool blue-gray ambient tint (whole screen).
+//   2. Heavier vignette: misty white at the screen edges, denser in corners.
+//   3. Drifting fog patches: large radial blobs that slowly cross the view.
+//   4. Low ground mist: horizontal misty band along the bottom third.
 //
-// All drawn in screen space (after the world ctx.restore()), so the camera
-// can't move it. We deliberately don't make this opaque — it's vibe, not
-// fog-of-war.
+// This is mood/atmosphere, NOT fog of war — never opaque enough to hide
+// gameplay, but heavy enough to be unmistakably "rainy PNW."
 
 const FOG_PATCHES = [
-  { ox: 0.2, oy: 0.3, r: 0.5, vx:  0.012, vy: -0.004, alpha: 0.18 },
-  { ox: 0.6, oy: 0.7, r: 0.7, vx: -0.008, vy:  0.006, alpha: 0.14 },
-  { ox: 0.8, oy: 0.2, r: 0.6, vx:  0.006, vy:  0.010, alpha: 0.16 },
-  { ox: 0.3, oy: 0.8, r: 0.6, vx: -0.010, vy: -0.005, alpha: 0.12 },
+  { ox: 0.2, oy: 0.3, r: 0.6, vx:  0.012, vy: -0.004, alpha: 0.32 },
+  { ox: 0.6, oy: 0.7, r: 0.8, vx: -0.008, vy:  0.006, alpha: 0.28 },
+  { ox: 0.8, oy: 0.2, r: 0.7, vx:  0.006, vy:  0.010, alpha: 0.30 },
+  { ox: 0.3, oy: 0.8, r: 0.7, vx: -0.010, vy: -0.005, alpha: 0.26 },
+  { ox: 0.5, oy: 0.5, r: 0.9, vx:  0.005, vy:  0.003, alpha: 0.22 },
 ];
+
+// Positive modulo so patches with negative velocities wrap into [0, 1.4)
+// instead of drifting off-screen forever.
+function pmod(x, m) { return ((x % m) + m) % m; }
 
 function drawFog(W, H) {
   const t = performance.now() / 1000;
-  // Vignette — radial gradient from transparent center to misty edges
-  const vGrad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
-  vGrad.addColorStop(0, 'rgba(220, 232, 240, 0)');
-  vGrad.addColorStop(1, 'rgba(220, 232, 240, 0.30)');
+
+  // 1. Cool ambient tint
+  ctx.fillStyle = 'rgba(170, 195, 220, 0.10)';
+  ctx.fillRect(0, 0, W, H);
+
+  // 2. Vignette — much heavier at the edges
+  const vGrad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.20, W / 2, H / 2, Math.max(W, H) * 0.75);
+  vGrad.addColorStop(0,    'rgba(220, 232, 240, 0)');
+  vGrad.addColorStop(0.55, 'rgba(220, 232, 240, 0.15)');
+  vGrad.addColorStop(1,    'rgba(220, 232, 240, 0.55)');
   ctx.fillStyle = vGrad;
   ctx.fillRect(0, 0, W, H);
 
-  // Drifting patches
+  // 3. Drifting fog patches
   for (const p of FOG_PATCHES) {
-    const phaseX = (p.ox + p.vx * t) % 1.4 - 0.2;  // wraps off-screen
-    const phaseY = (p.oy + p.vy * t) % 1.4 - 0.2;
+    const phaseX = pmod(p.ox + p.vx * t, 1.4) - 0.2;   // in [-0.2, 1.2]
+    const phaseY = pmod(p.oy + p.vy * t, 1.4) - 0.2;
     const cx = phaseX * W;
     const cy = phaseY * H;
-    const r = p.r * Math.min(W, H) * 0.7;
+    const r = p.r * Math.min(W, H) * 0.8;
     const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grad.addColorStop(0, `rgba(245, 248, 252, ${p.alpha})`);
-    grad.addColorStop(0.6, `rgba(220, 232, 240, ${p.alpha * 0.4})`);
-    grad.addColorStop(1, 'rgba(200, 220, 232, 0)');
+    grad.addColorStop(0,   `rgba(248, 250, 253, ${p.alpha})`);
+    grad.addColorStop(0.5, `rgba(225, 235, 245, ${p.alpha * 0.5})`);
+    grad.addColorStop(1,   'rgba(200, 220, 232, 0)');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
   }
 
-  // Faint cool tint on top — PNW mood
-  ctx.fillStyle = 'rgba(180, 200, 220, 0.04)';
-  ctx.fillRect(0, 0, W, H);
+  // 4. Low ground mist — denser along the bottom of the screen, slow drift
+  const mistOffset = (t * 8) % 60;
+  const mistGrad = ctx.createLinearGradient(0, H * 0.55, 0, H);
+  mistGrad.addColorStop(0,    'rgba(230, 238, 245, 0)');
+  mistGrad.addColorStop(0.5,  'rgba(230, 238, 245, 0.15)');
+  mistGrad.addColorStop(1,    'rgba(220, 232, 240, 0.32)');
+  ctx.fillStyle = mistGrad;
+  ctx.fillRect(0, H * 0.55, W, H * 0.45);
+
+  // Subtle horizontal streaks in the ground mist for movement
+  ctx.fillStyle = 'rgba(245, 250, 252, 0.08)';
+  for (let i = 0; i < 4; i++) {
+    const y = H * 0.65 + i * (H * 0.08);
+    const x = -mistOffset + i * 100;
+    ctx.fillRect(x, y, W + 100, 18);
+  }
 }
 
 // ── Minimap ──────────────────────────────────────────────────────────────
