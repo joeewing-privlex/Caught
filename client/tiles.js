@@ -50,9 +50,10 @@ const TILE = {
   baseA:     [62],
   baseB:     [63],
   // power-up trillium (drawn separately; not in cell grid)
-  flowerWhite: [89],
-  flowerPink:  [90],
-  flowerRed:   [91],
+  flowerWhite:  [89],
+  flowerPink:   [90],
+  flowerRed:    [91],
+  flowerYellow: [92],   // Yellow Trillium — vision/Lookout power-up
 };
 
 let sheetImage = null;
@@ -119,8 +120,9 @@ export function grassForCell(tx, ty) {
 }
 
 export function flowerTileFor(type) {
-  if (type === 'white_trillium') return TILE.flowerWhite[0];
-  if (type === 'pink_trillium')  return TILE.flowerPink[0];
-  if (type === 'red_trillium')   return TILE.flowerRed[0];
+  if (type === 'white_trillium')  return TILE.flowerWhite[0];
+  if (type === 'pink_trillium')   return TILE.flowerPink[0];
+  if (type === 'red_trillium')    return TILE.flowerRed[0];
+  if (type === 'yellow_trillium') return TILE.flowerYellow[0];
   return TILE.flowerWhite[0];
 }

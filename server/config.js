@@ -37,4 +37,8 @@ module.exports = {
   POWERUP_RESPAWN_SEC: 10,
   MAGNET_RADIUS: 150,
   BASE_IMMUNITY_SEC: 2,
+
+  // --- Fog of war
+  VISION_RADIUS: 350,           // default per-player vision (world units)
+  VISION_RADIUS_BOOSTED: 700,   // vision while yellow_trillium is active
 };

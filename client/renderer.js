@@ -21,9 +21,10 @@ const BUTTERFLY_TINT = {
   admiral: '#4040a0',
 };
 const POWERUP_ICONS = {
-  white_trillium: '💨',
-  pink_trillium: '🧲',
-  red_trillium: '🛡️',
+  white_trillium:  '💨',
+  pink_trillium:   '🧲',
+  red_trillium:    '🛡️',
+  yellow_trillium: '👁️',
 };
 
 // Sprite display size in game units (matches PLAYER_RADIUS visually)
@@ -132,8 +133,9 @@ function loop() {
 
   ctx.restore();
 
-  // Fog passes in screen space (after camera transform restored)
-  drawFog(W, H);
+  // Fog of war in screen space — dark mask everywhere except inside the
+  // team's vision circles (per teammate, expanded by Yellow Trillium).
+  drawFogOfWar(state, camX, camY, W, H);
 
   // Minimap is drawn in screen space too
   drawMinimap(state, W, H);
@@ -342,75 +344,102 @@ export function updateHUD(state, myPowerup, myPowerupRemaining, myPowerupMax) {
   }
 }
 
-// ── Fog (PNW atmosphere) ──────────────────────────────────────────────────
+// ── Fog of War ────────────────────────────────────────────────────────────
 //
-// Four passes, drawn in screen space after the world ctx.restore():
-//   1. Cool blue-gray ambient tint (whole screen).
-//   2. Heavier vignette: misty white at the screen edges, denser in corners.
-//   3. Drifting fog patches: large radial blobs that slowly cross the view.
-//   4. Low ground mist: horizontal misty band along the bottom third.
+// Outside the vision radius of every (connected) teammate, the world is
+// fully obscured by dark fog. Inside, full visibility. Soft gradient at the
+// rim of each circle. Yellow Trillium ("Lookout") doubles the radius.
 //
-// This is mood/atmosphere, NOT fog of war — never opaque enough to hide
-// gameplay, but heavy enough to be unmistakably "rainy PNW."
+// Implementation: each frame, build a fog mask on an off-screen canvas:
+//   1. Fill it solid dark.
+//   2. For each teammate, "punch a hole" via destination-out with a radial
+//      gradient (fully transparent at center, fading to zero alpha at radius).
+//   3. Composite the resulting mask over the main canvas.
+//
+// Vision radius constants below MUST match server/config.js.
 
-const FOG_PATCHES = [
-  { ox: 0.2, oy: 0.3, r: 0.6, vx:  0.012, vy: -0.004, alpha: 0.32 },
-  { ox: 0.6, oy: 0.7, r: 0.8, vx: -0.008, vy:  0.006, alpha: 0.28 },
-  { ox: 0.8, oy: 0.2, r: 0.7, vx:  0.006, vy:  0.010, alpha: 0.30 },
-  { ox: 0.3, oy: 0.8, r: 0.7, vx: -0.010, vy: -0.005, alpha: 0.26 },
-  { ox: 0.5, oy: 0.5, r: 0.9, vx:  0.005, vy:  0.003, alpha: 0.22 },
-];
+const VISION_RADIUS         = 350;
+const VISION_RADIUS_BOOSTED = 700;
+const FOG_COLOR             = 'rgba(20, 30, 45, 0.96)';   // near-opaque dark blue
 
-// Positive modulo so patches with negative velocities wrap into [0, 1.4)
-// instead of drifting off-screen forever.
-function pmod(x, m) { return ((x % m) + m) % m; }
+// Reusable off-screen canvas so we don't allocate every frame.
+let fogCanvas = null;
+let fogCtx = null;
 
-function drawFog(W, H) {
-  const t = performance.now() / 1000;
+function ensureFogCanvas(W, H) {
+  if (!fogCanvas) {
+    fogCanvas = document.createElement('canvas');
+    fogCtx = fogCanvas.getContext('2d');
+  }
+  if (fogCanvas.width !== W || fogCanvas.height !== H) {
+    fogCanvas.width = W;
+    fogCanvas.height = H;
+  }
+}
 
-  // 1. Cool ambient tint
-  ctx.fillStyle = 'rgba(170, 195, 220, 0.10)';
-  ctx.fillRect(0, 0, W, H);
+function visionRadiusFor(player) {
+  return player.powerup === 'yellow_trillium' ? VISION_RADIUS_BOOSTED : VISION_RADIUS;
+}
 
-  // 2. Vignette — much heavier at the edges
-  const vGrad = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.20, W / 2, H / 2, Math.max(W, H) * 0.75);
-  vGrad.addColorStop(0,    'rgba(220, 232, 240, 0)');
-  vGrad.addColorStop(0.55, 'rgba(220, 232, 240, 0.15)');
-  vGrad.addColorStop(1,    'rgba(220, 232, 240, 0.55)');
-  ctx.fillStyle = vGrad;
-  ctx.fillRect(0, 0, W, H);
+function drawFogOfWar(state, camX, camY, W, H) {
+  ensureFogCanvas(W, H);
 
-  // 3. Drifting fog patches
-  for (const p of FOG_PATCHES) {
-    const phaseX = pmod(p.ox + p.vx * t, 1.4) - 0.2;   // in [-0.2, 1.2]
-    const phaseY = pmod(p.oy + p.vy * t, 1.4) - 0.2;
-    const cx = phaseX * W;
-    const cy = phaseY * H;
-    const r = p.r * Math.min(W, H) * 0.8;
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grad.addColorStop(0,   `rgba(248, 250, 253, ${p.alpha})`);
-    grad.addColorStop(0.5, `rgba(225, 235, 245, ${p.alpha * 0.5})`);
-    grad.addColorStop(1,   'rgba(200, 220, 232, 0)');
-    ctx.fillStyle = grad;
+  // Find local player to know my team
+  const me = state.players.find(p => p.id === myId);
+  if (!me) {
+    // No local player yet — render fully fogged
+    ctx.fillStyle = FOG_COLOR;
     ctx.fillRect(0, 0, W, H);
+    return;
   }
+  const myTeamLocal = me.team;
 
-  // 4. Low ground mist — denser along the bottom of the screen, slow drift
-  const mistOffset = (t * 8) % 60;
-  const mistGrad = ctx.createLinearGradient(0, H * 0.55, 0, H);
-  mistGrad.addColorStop(0,    'rgba(230, 238, 245, 0)');
-  mistGrad.addColorStop(0.5,  'rgba(230, 238, 245, 0.15)');
-  mistGrad.addColorStop(1,    'rgba(220, 232, 240, 0.32)');
-  ctx.fillStyle = mistGrad;
-  ctx.fillRect(0, H * 0.55, W, H * 0.45);
+  // Fill fog canvas with dark
+  fogCtx.globalCompositeOperation = 'source-over';
+  fogCtx.fillStyle = FOG_COLOR;
+  fogCtx.fillRect(0, 0, W, H);
 
-  // Subtle horizontal streaks in the ground mist for movement
-  ctx.fillStyle = 'rgba(245, 250, 252, 0.08)';
-  for (let i = 0; i < 4; i++) {
-    const y = H * 0.65 + i * (H * 0.08);
-    const x = -mistOffset + i * 100;
-    ctx.fillRect(x, y, W + 100, 18);
+  // Punch a soft hole per connected teammate
+  fogCtx.globalCompositeOperation = 'destination-out';
+  for (const p of state.players) {
+    if (p.disconnected) continue;
+    if (p.team !== myTeamLocal) continue;
+    const sx = p.x - camX;
+    const sy = p.y - camY;
+    const r = visionRadiusFor(p);
+    // Skip if entirely off-screen (small perf win)
+    if (sx + r < 0 || sx - r > W || sy + r < 0 || sy - r > H) continue;
+
+    const grad = fogCtx.createRadialGradient(sx, sy, 0, sx, sy, r);
+    grad.addColorStop(0,    'rgba(255,255,255,1.00)');
+    grad.addColorStop(0.65, 'rgba(255,255,255,0.95)');
+    grad.addColorStop(0.90, 'rgba(255,255,255,0.40)');
+    grad.addColorStop(1,    'rgba(255,255,255,0)');
+    fogCtx.fillStyle = grad;
+    fogCtx.fillRect(sx - r, sy - r, r * 2, r * 2);
   }
+  fogCtx.globalCompositeOperation = 'source-over';
+
+  // Composite fog onto main canvas
+  ctx.drawImage(fogCanvas, 0, 0);
+
+  // Light ambient tint INSIDE the vision area for PNW mood (subtle)
+  ctx.fillStyle = 'rgba(170, 195, 220, 0.05)';
+  ctx.fillRect(0, 0, W, H);
+}
+
+// Returns true if a world-space point is currently visible to the local team.
+// Used by the minimap to fog out distant enemies/butterflies.
+function inTeamVision(state, x, y) {
+  const me = state.players.find(p => p.id === myId);
+  if (!me) return false;
+  for (const p of state.players) {
+    if (p.disconnected) continue;
+    if (p.team !== me.team) continue;
+    const r = visionRadiusFor(p);
+    if ((p.x - x) * (p.x - x) + (p.y - y) * (p.y - y) <= r * r) return true;
+  }
+  return false;
 }
 
 // ── Minimap ──────────────────────────────────────────────────────────────
@@ -486,15 +515,52 @@ function drawMinimap(state, W, H) {
   const sx = MINIMAP_W / map.width;
   const sy = MINIMAP_H / map.height;
 
-  // Butterflies (free): tiny faint dots
+  const me = state.players.find(p => p.id === myId);
+  const myTeamLocal = me ? me.team : null;
+
+  // Tint the minimap area OUTSIDE current vision so the player can see at a
+  // glance what's fogged. Lay down a translucent dark over everything, then
+  // "punch holes" via destination-out for each teammate vision circle.
+  // We use the main ctx with save/restore.
+  ctx.save();
+  // Clip to minimap rect
+  ctx.beginPath();
+  ctx.rect(x0, y0, MINIMAP_W, MINIMAP_H);
+  ctx.clip();
+  ctx.fillStyle = 'rgba(20, 30, 45, 0.70)';
+  ctx.fillRect(x0, y0, MINIMAP_W, MINIMAP_H);
+  if (me) {
+    ctx.globalCompositeOperation = 'destination-out';
+    for (const p of state.players) {
+      if (p.disconnected) continue;
+      if (p.team !== myTeamLocal) continue;
+      const r = visionRadiusFor(p);
+      const mx = x0 + p.x * sx;
+      const my = y0 + p.y * sy;
+      const mr = r * sx;     // scale radius to minimap
+      const grad = ctx.createRadialGradient(mx, my, 0, mx, my, mr);
+      grad.addColorStop(0,    'rgba(255,255,255,1)');
+      grad.addColorStop(0.85, 'rgba(255,255,255,0.85)');
+      grad.addColorStop(1,    'rgba(255,255,255,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(mx - mr, my - mr, mr * 2, mr * 2);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.restore();
+
+  // Free butterflies — only show if inside team vision
   ctx.fillStyle = 'rgba(240,220,80,0.7)';
   for (const b of state.butterflies) {
+    if (!inTeamVision(state, b.x, b.y)) continue;
     ctx.fillRect(x0 + b.x * sx - 0.5, y0 + b.y * sy - 0.5, 2, 2);
   }
 
-  // Players: colored dots, slightly larger for local player
+  // Players: own team always visible; enemies only if in vision
   for (const p of state.players) {
     if (p.disconnected) continue;
+    const isMine = p.team === myTeamLocal;
+    if (!isMine && !inTeamVision(state, p.x, p.y)) continue;
     const px = x0 + p.x * sx;
     const py = y0 + p.y * sy;
     const isMe = p.id === myId;

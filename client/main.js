@@ -5,7 +5,7 @@ import * as Renderer from './renderer.js';
 import * as UI       from './ui.js';
 import { getClientId, getDisplayName, setDisplayName, getLastRoomCode, setLastRoomCode } from './identity.js';
 
-const POWERUP_MAX = { white_trillium: 5, pink_trillium: 6, red_trillium: 5 };
+const POWERUP_MAX = { white_trillium: 5, pink_trillium: 6, red_trillium: 5, yellow_trillium: 8 };
 
 const clientId = getClientId();
 let savedName = getDisplayName();

@@ -1,6 +1,6 @@
 let nextId = 1;
 
-const TYPES = ['white_trillium', 'pink_trillium', 'red_trillium'];
+const TYPES = ['white_trillium', 'pink_trillium', 'red_trillium', 'yellow_trillium'];
 
 function createFlower(map, pointIndex) {
   const pt = map.powerupSpawns[pointIndex];
@@ -30,6 +30,7 @@ const EFFECT_DURATION = {
   white_trillium: 5,
   pink_trillium: 6,
   red_trillium: 5,
+  yellow_trillium: 8,     // "Lookout" — extended vision range
 };
 
 module.exports = { initFlowers, pickRespawnPoint, EFFECT_DURATION };
