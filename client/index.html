@@ -17,6 +17,8 @@
     .screen.active { display: flex; }
 
     h1 { font-size: 2.4rem; color: #a8d070; text-shadow: 0 2px 8px rgba(0,0,0,0.5); }
+    .logo { width: min(360px, 80vw); height: auto; image-rendering: pixelated;
+      filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5)); margin-bottom: 4px; }
     h2 { font-size: 1.4rem; color: #c8e090; }
     h3 { font-size: 1.05rem; color: #c8e090; margin-top: 8px; }
     p  { color: #c0d0a0; font-size: 0.92rem; text-align: center; }
@@ -107,6 +109,12 @@
     #reconnect-overlay.show { display: flex; }
     #reconnect-overlay h2 { color: #e0c040; }
 
+    #map-name-banner { position: fixed; top: 130px; left: 50%; transform: translateX(-50%);
+      font-size: 1.3rem; color: #ffd060; text-shadow: 0 2px 8px rgba(0,0,0,0.85);
+      background: rgba(20,40,20,0.7); padding: 6px 18px; border-radius: 6px;
+      z-index: 18; pointer-events: none; opacity: 0; transition: opacity 0.4s; }
+    #map-name-banner.show { opacity: 1; }
+
     /* Series interstitial */
     #screen-interstitial .standings { width: 100%; max-height: 280px; overflow-y: auto; }
     .standing-row { display: flex; gap: 8px; padding: 5px 8px; border-radius: 4px; background: rgba(255,255,255,0.04); margin: 2px 0;
@@ -138,6 +146,8 @@
   </div>
 </div>
 
+<div id="map-name-banner"></div>
+
 <div id="reconnect-overlay">
   <h2>Reconnecting…</h2>
   <p id="reconnect-msg">Trying to restore your session.</p>
@@ -146,13 +156,13 @@
 <div id="screens">
   <!-- Boot/loading -->
   <div id="screen-boot" class="screen active">
-    <h1>🦋 Caught</h1>
+    <img src="/assets/CaughtLogo.png" class="logo" alt="Caught" />
     <p id="boot-msg">Waking up the server…</p>
   </div>
 
   <!-- Main menu -->
   <div id="screen-menu" class="screen">
-    <h1>🦋 Caught</h1>
+    <img src="/assets/CaughtLogo.png" class="logo" alt="Caught" />
     <p>Catch butterflies, bank them, steal from your rivals.</p>
     <input id="player-name" type="text" placeholder="Your name" maxlength="16" />
     <div id="error-msg"></div>

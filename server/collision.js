@@ -1,7 +1,7 @@
 // Tile-grid collision. See spec.md §5.5.
 
 const { TILE_SIZE } = require('./config');
-const { isBlocking, isBase, CELL } = require('./procgen/tiles');
+const { isBlocking, isBase, CELL } = require('./tiles');
 
 const PLAYER_RADIUS = 14;
 const BUTTERFLY_RADIUS = 6;

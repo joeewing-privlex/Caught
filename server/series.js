@@ -2,7 +2,7 @@
 // See spec.md §4.3.
 
 const { SERIES_ROUNDS, INTERSTITIAL_SEC, COUNTDOWN_SEC } = require('./config');
-const { generate } = require('./procgen');
+const { pickByRoundIndex } = require('./maps');
 const mutators = require('./mutators');
 const { GameRoom } = require('./gameState');
 
@@ -45,8 +45,7 @@ class Series {
 
   _beginRound() {
     this.roundIndex++;
-    const seed = `${this.roomCode}-${this.roundIndex}`;
-    const map = generate(seed);
+    const map = pickByRoundIndex(this.roomCode, this.roundIndex);
 
     const exclude = new Set();
     if (this.lastMutatorId) exclude.add(this.lastMutatorId);
@@ -86,7 +85,8 @@ class Series {
 
     this.io.to(this.roomCode).emit('round:start', {
       map: {
-        seed: map.seed,
+        id: map.id,
+        name: map.name,
         width: map.width, height: map.height,
         tileSize: map.tileSize, tilesW: map.tilesW, tilesH: map.tilesH,
         cells: map.cells,
@@ -138,8 +138,8 @@ class Series {
     this.readySet.clear();
 
     const standingsList = Object.values(this.standings).sort((a, b) => b.points - a.points);
-    const nextSeed = `${this.roomCode}-${this.roundIndex + 1}`;
-    // Peek at next mutator (just for preview; final pick happens at _beginRound)
+    // Peek at next map and mutator (just for preview; final picks happen at _beginRound)
+    const nextMap = pickByRoundIndex(this.roomCode, this.roundIndex + 1);
     const exclude = new Set(this.lastMutatorId ? [this.lastMutatorId] : []);
     const nextMut = mutators.pick(this.mutatorPool, exclude);
 
@@ -149,7 +149,7 @@ class Series {
       totalRounds: this.totalRounds,
       lastRoundScores: scores,
       lastWinningTeam: winningTeam,
-      nextSeed,
+      nextMap: { id: nextMap.id, name: nextMap.name },
       nextMutator: { id: nextMut.id, name: nextMut.name, description: nextMut.description },
       interstitialSec: INTERSTITIAL_SEC,
     });

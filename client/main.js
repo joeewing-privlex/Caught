@@ -263,7 +263,6 @@ function enterRound(data) {
   flowers = [];
 
   const map = data.map;
-  UI.show('screen-boot');             // hide all dialogs
   for (const el of document.querySelectorAll('.screen')) el.classList.remove('active');
   UI.showHUD(true);
   Renderer.setMutatorBadge(data.mutator ? data.mutator.name : '');
@@ -278,6 +277,7 @@ function enterRound(data) {
   lastTickReceivedAt = performance.now();
   startTickWatcher();
 
+  if (map.name) UI.showMapName(map.name);
   UI.showCountdown('GO!');
 }
 

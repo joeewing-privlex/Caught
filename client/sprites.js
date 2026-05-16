@@ -45,15 +45,17 @@ export function loadAllSprites() {
 }
 
 // Pick orientation by angle (radians). +X is right, +Y is down (screen-down).
-// Returns { img, flip } where flip=true means flip horizontally.
+// Returns { img, flip } where flip=true means flip horizontally at draw time.
+//
+// IMPORTANT: Kenney's `*side.png` sprites face RIGHT by default
+// (the butterfly net extends to the right of the character). So:
+//   moving right (deg ≈ 0)   → side, no flip   → faces right ✓
+//   moving left  (deg ≈ 180) → side, flipped   → faces left  ✓
+// If you change `flip` polarity here, also update the renderer's `ctx.scale(-1,1)`
+// or the character will face backwards.
 export function pickSprite(color, angle) {
   const c = loaded[color] || loaded.blue;
-  // Quadrant: -135..-45 = up, -45..45 = right, 45..135 = down, else left
   const deg = ((angle * 180 / Math.PI) % 360 + 360) % 360;
-  // 315..45  → right (0deg-ish)
-  // 45..135  → down
-  // 135..225 → left
-  // 225..315 → up
   if (deg >= 315 || deg < 45)  return { img: c.side,  flip: false };  // right
   if (deg < 135)               return { img: c.front, flip: false };  // down (facing camera)
   if (deg < 225)               return { img: c.side,  flip: true  };  // left

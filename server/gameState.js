@@ -364,7 +364,14 @@ class GameRoom {
   // Full snapshot for a resuming reconnect — includes static map + mutator.
   getResumeSnapshot() {
     return {
-      map: this.map,
+      map: {
+        id: this.map.id,
+        name: this.map.name,
+        width: this.map.width, height: this.map.height,
+        tileSize: this.map.tileSize, tilesW: this.map.tilesW, tilesH: this.map.tilesH,
+        cells: this.map.cells,
+        bases: this.map.bases,
+      },
       mutator: { id: this.mutator.id, name: this.mutator.name, description: this.mutator.description },
       teamAssignments: Object.values(this.players).map(p => ({
         clientId: p.clientId, name: p.name, team: p.team, color: p.color,

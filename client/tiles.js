@@ -10,7 +10,7 @@ const GAP = 1;
 const COLS = 12;
 const ROWS = 11;
 
-// Semantic cell IDs (must match server/procgen/tiles.js)
+// Semantic cell IDs (must match server/tiles.js).
 export const CELL = {
   GRASS:  0,
   PATH:   1,
@@ -22,6 +22,8 @@ export const CELL = {
   FENCE:  7,
   BASE_A: 8,
   BASE_B: 9,
+  FLOWER: 10,
+  STUMP:  11,
 };
 
 // Hand-picked tile indices into the packed sheet. Numbers chosen by eyeballing
@@ -40,12 +42,14 @@ const TILE = {
   // blockers
   tree:      [4],
   rock:      [13],
+  stump:     [5],
   bush:      [16],
   fence:     [44],
-  // markers
-  baseA:     [62],   // blue flag / lookout (eyeballed)
+  flower:    [29],   // decorative wildflower
+  // base markers
+  baseA:     [62],
   baseB:     [63],
-  // power-up flowers (drawn separately; not in cell grid)
+  // power-up trillium (drawn separately; not in cell grid)
   flowerWhite: [89],
   flowerPink:  [90],
   flowerRed:   [91],
@@ -99,8 +103,10 @@ export function overlayForCell(cellId, tx, ty) {
     case CELL.BRIDGE: return variantPick(TILE.bridge, tx, ty);
     case CELL.TREE:   return variantPick(TILE.tree, tx, ty);
     case CELL.ROCK:   return variantPick(TILE.rock, tx, ty);
+    case CELL.STUMP:  return variantPick(TILE.stump, tx, ty);
     case CELL.BUSH:   return variantPick(TILE.bush, tx, ty);
     case CELL.FENCE:  return variantPick(TILE.fence, tx, ty);
+    case CELL.FLOWER: return variantPick(TILE.flower, tx, ty);
     case CELL.BASE_A: return variantPick(TILE.baseA, tx, ty);
     case CELL.BASE_B: return variantPick(TILE.baseB, tx, ty);
     default: return null;

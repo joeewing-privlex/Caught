@@ -48,6 +48,15 @@ export function showReconnectOverlay(on, msg) {
   if (msg) document.getElementById('reconnect-msg').textContent = msg;
 }
 
+export function showMapName(name) {
+  const el = document.getElementById('map-name-banner');
+  if (!el) return;
+  el.textContent = name;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
 export function renderLobby(data, myClientId) {
   document.getElementById('room-code-display').textContent = data.roomCode;
 
@@ -136,8 +145,10 @@ export function renderInterstitial(data, myClientId) {
   renderStandings('standings-list', data.standings, myClientId);
 
   const nm = data.nextMutator || {};
+  const nMap = data.nextMap || {};
   document.getElementById('next-mutator-info').innerHTML =
-    `Next mutator: <strong>${escapeHTML(nm.name || 'None')}</strong> — ${escapeHTML(nm.description || '')}`;
+    `Next map: <strong>${escapeHTML(nMap.name || '?')}</strong> · ` +
+    `Mutator: <strong>${escapeHTML(nm.name || 'None')}</strong> — ${escapeHTML(nm.description || '')}`;
 
   document.getElementById('interstitial-countdown').textContent =
     `Next round in ${data.interstitialSec || 20}s, or when everyone's ready.`;
