@@ -141,60 +141,93 @@ function loop() {
   drawMinimap(state, W, H);
 }
 
-function drawTiles(camX, camY, W, H) {
+// Static tile background, baked once per map into an offscreen canvas.
+// The map's tile grid never changes after game:start, so the 3-pass tile
+// loop only needs to run on the first frame after assets are ready.
+let bgCanvas = null;
+let bgCanvasMapId = null;
+
+function buildBackgroundCanvas() {
   const sheet = getSheet();
+  if (!sheet) return null;
   const tileSize = map.tileSize;
-  const tilePx = getTilePx();
   const tilesW = map.tilesW;
   const tilesH = map.tilesH;
   const cells = map.cells;
 
-  // Visible tile range
-  const tx0 = Math.max(0, Math.floor(camX / tileSize));
-  const ty0 = Math.max(0, Math.floor(camY / tileSize));
-  const tx1 = Math.min(tilesW - 1, Math.floor((camX + W) / tileSize));
-  const ty1 = Math.min(tilesH - 1, Math.floor((camY + H) / tileSize));
-
-  if (!sheet) {
-    // Fallback before asset load — flat green
-    ctx.fillStyle = '#3a6e2a';
-    ctx.fillRect(tx0 * tileSize, ty0 * tileSize, (tx1 - tx0 + 1) * tileSize, (ty1 - ty0 + 1) * tileSize);
-    return;
-  }
+  const off = document.createElement('canvas');
+  off.width = map.width;
+  off.height = map.height;
+  const octx = off.getContext('2d');
+  octx.imageSmoothingEnabled = false;
 
   // Pass 1: grass base everywhere
-  for (let ty = ty0; ty <= ty1; ty++) {
-    for (let tx = tx0; tx <= tx1; tx++) {
+  for (let ty = 0; ty < tilesH; ty++) {
+    for (let tx = 0; tx < tilesW; tx++) {
       const idx = grassForCell(tx, ty);
       const s = tileSrc(idx);
-      ctx.drawImage(sheet, s.sx, s.sy, s.sw, s.sh, tx * tileSize, ty * tileSize, tileSize, tileSize);
+      octx.drawImage(sheet, s.sx, s.sy, s.sw, s.sh, tx * tileSize, ty * tileSize, tileSize, tileSize);
     }
   }
 
   // Pass 2: tint base patches so teams are visually obvious (under the marker)
-  for (let ty = ty0; ty <= ty1; ty++) {
-    for (let tx = tx0; tx <= tx1; tx++) {
+  for (let ty = 0; ty < tilesH; ty++) {
+    for (let tx = 0; tx < tilesW; tx++) {
       const cell = cells[ty * tilesW + tx];
       if (cell === CELL.BASE_A) {
-        ctx.fillStyle = 'rgba(64,128,255,0.35)';
-        ctx.fillRect(tx * tileSize, ty * tileSize, tileSize, tileSize);
+        octx.fillStyle = 'rgba(64,128,255,0.35)';
+        octx.fillRect(tx * tileSize, ty * tileSize, tileSize, tileSize);
       } else if (cell === CELL.BASE_B) {
-        ctx.fillStyle = 'rgba(255,80,80,0.35)';
-        ctx.fillRect(tx * tileSize, ty * tileSize, tileSize, tileSize);
+        octx.fillStyle = 'rgba(255,80,80,0.35)';
+        octx.fillRect(tx * tileSize, ty * tileSize, tileSize, tileSize);
       }
     }
   }
 
   // Pass 3: overlay tiles (water, blockers, decor, base markers)
-  for (let ty = ty0; ty <= ty1; ty++) {
-    for (let tx = tx0; tx <= tx1; tx++) {
+  for (let ty = 0; ty < tilesH; ty++) {
+    for (let tx = 0; tx < tilesW; tx++) {
       const cell = cells[ty * tilesW + tx];
       const overlayIdx = overlayForCell(cell, tx, ty);
       if (overlayIdx == null) continue;
       const s = tileSrc(overlayIdx);
-      ctx.drawImage(sheet, s.sx, s.sy, s.sw, s.sh, tx * tileSize, ty * tileSize, tileSize, tileSize);
+      octx.drawImage(sheet, s.sx, s.sy, s.sw, s.sh, tx * tileSize, ty * tileSize, tileSize, tileSize);
     }
   }
+
+  return off;
+}
+
+function drawTiles(camX, camY, W, H) {
+  const sheet = getSheet();
+  const tileSize = map.tileSize;
+
+  if (!sheet) {
+    // Fallback before asset load — flat green over the visible region
+    const tx0 = Math.max(0, Math.floor(camX / tileSize));
+    const ty0 = Math.max(0, Math.floor(camY / tileSize));
+    const tx1 = Math.min(map.tilesW - 1, Math.floor((camX + W) / tileSize));
+    const ty1 = Math.min(map.tilesH - 1, Math.floor((camY + H) / tileSize));
+    ctx.fillStyle = '#3a6e2a';
+    ctx.fillRect(tx0 * tileSize, ty0 * tileSize, (tx1 - tx0 + 1) * tileSize, (ty1 - ty0 + 1) * tileSize);
+    return;
+  }
+
+  // Rebuild the cache once per map.
+  const mapId = map.id || 'unknown';
+  if (!bgCanvas || bgCanvasMapId !== mapId) {
+    bgCanvas = buildBackgroundCanvas();
+    bgCanvasMapId = mapId;
+  }
+  if (!bgCanvas) return;
+
+  // Blit only the visible region from the baked background.
+  const sx = Math.max(0, camX);
+  const sy = Math.max(0, camY);
+  const sw = Math.min(map.width  - sx, W + (camX < 0 ? camX : 0));
+  const sh = Math.min(map.height - sy, H + (camY < 0 ? camY : 0));
+  if (sw <= 0 || sh <= 0) return;
+  ctx.drawImage(bgCanvas, sx, sy, sw, sh, sx, sy, sw, sh);
 }
 
 function drawFlowers(state) {

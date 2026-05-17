@@ -8,7 +8,8 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #1a2e1a; font-family: 'Georgia', serif; color: #f0e8d0; overflow: hidden; }
 
-    #screens { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 10; }
+    #screens { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 10; pointer-events: none; }
+    .screen.active { pointer-events: auto; }
 
     .screen { display: none; flex-direction: column; align-items: center; gap: 16px;
       background: rgba(20,40,20,0.95); border: 3px solid #5a8a3a; border-radius: 12px;

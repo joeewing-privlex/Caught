@@ -6,7 +6,7 @@
 
 const SHEET_PATH = '/assets/kenney/tilemap/tilemap_packed.png';
 const TILE_PX = 16;
-const GAP = 1;
+const GAP = 0;
 const COLS = 12;
 const ROWS = 11;
 

@@ -12,7 +12,11 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);  // same-origin, no CORS needed on Render
 
-app.use(express.static(path.join(__dirname, '../client')));
+app.use(express.static(path.join(__dirname, '../client'), {
+  maxAge: '1h',
+  etag: true,
+  lastModified: true,
+}));
 
 // Health endpoint for Render
 app.get('/health', (_req, res) => {

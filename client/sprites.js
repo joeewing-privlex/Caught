@@ -56,9 +56,9 @@ export function loadAllSprites() {
 export function pickSprite(color, angle) {
   const c = loaded[color] || loaded.blue;
   const deg = ((angle * 180 / Math.PI) % 360 + 360) % 360;
-  if (deg >= 315 || deg < 45)  return { img: c.side,  flip: false };  // right
+  if (deg >= 315 || deg < 45)  return { img: c.side,  flip: true };  // right
   if (deg < 135)               return { img: c.front, flip: false };  // down (facing camera)
-  if (deg < 225)               return { img: c.side,  flip: true  };  // left
+  if (deg < 225)               return { img: c.side,  flip: false  };  // left
   return                              { img: c.back,  flip: false };  // up (away from camera)
 }
 
